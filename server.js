@@ -836,8 +836,8 @@ function updateStats(p){
 function generateCandles(p){
   const n=50;
   const arr=[];
-  let base=p.start;
-  const vol=p.start*0.008;
+  let base=PAIR_START[p.symbol]||p.price||1;
+  const vol=base*0.008;
   for(let i=0;i<n;i++){
     const o=base+(Math.random()-0.5)*vol;
     const c=o+(Math.random()-0.5)*vol*1.2;
