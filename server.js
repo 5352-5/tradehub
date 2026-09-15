@@ -785,8 +785,8 @@ function onPrice(sym,price){
   }
 }
 
-// ---------- PAIRS ----------
-const PAIR_START=Object.fromEntries(PAIRS_LIST.map(p=>[p.symbol,p.start]));
+// ---------- PAIRS 
+const PAIR_START={"BTCUSDT":64000,"ETHUSDT":3400,"BNBUSDT":590,"SOLUSDT":148,"XRPUSDT":0.62,"ADAUSDT":0.45,"DOGEUSDT":0.16,"AVAXUSDT":36,"DOTUSDT":6.8,"LINKUSDT":18,"MATICUSDT":0.88,"LTCUSDT":84};
 function renderPairList(){
   const el=$('#pairList');
   el.innerHTML=state.pairs.map(p=>{
