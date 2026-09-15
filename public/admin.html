@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TradeHub · Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0b0e11;color:#eaecef;font-family:Inter,system-ui,sans-serif;font-size:13px;padding-bottom:40px}
+.top{background:#181a20;padding:12px 16px;display:flex;align-items:center;gap:16px;border-bottom:1px solid #2b3139;position:sticky;top:0;z-index:10}
+.brand{color:#f0b90b;font-weight:800;font-size:16px}
+.spacer{flex:1}
+.top a{color:#f0b90b;font-size:13px;text-decoration:none}
+.wrap{max-width:1300px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:16px}
+.panel{background:#181a20;border:1px solid #2b3139;border-radius:10px;padding:16px;overflow-x:auto}
+.panel h2{font-size:14px;color:#f0b90b;margin-bottom:12px;font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:12px;min-width:520px;font-family:'JetBrains Mono',monospace}
+th,td{text-align:left;padding:8px;border-bottom:1px solid #2b3139;white-space:nowrap}
+th{color:#5e6673;font-weight:500;font-size:10px;text-transform:uppercase;font-family:Inter,sans-serif}
+td button{background:#1e6cf5;color:#fff;padding:4px 9px;font-size:11px;margin-right:4px;border:none;border-radius:4px;cursor:pointer;font-family:inherit}
+td button.danger{background:#f6465d}
+.empty{padding:20px;text-align:center;color:#5e6673;font-size:12px}
+</style></head><body>
+<div class="top">
+  <div class="brand">⚡ TradeHub Admin</div>
+  <div class="spacer"></div>
+  <a href="/">← Terminal</a>
+</div>
+<div class="wrap" id="wrap"><div class="empty">Loading…</div></div>
+<script>
+function $(s){return document.querySelector(s)}
+async function load(){
+  var me=await fetch('/api/auth/me');
+  if(!me.ok){location.href='/login';return}
+  var md=await me.json();
+  if(!md.user.isAdmin){$('#wrap').innerHTML='<div class="empty">Admin required</div>';return}
+  var u=await fetch('/api/admin/users').then(function(r){return r.json()});
+  var p=await fetch('/api/admin/positions').then(function(r){return r.json()});
+  $('#wrap').innerHTML=
+    '<div class="panel"><h2>Users ('+u.users.length+')</h2><table><thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Admin</th><th>2FA</th><th>Balance</th><th>Actions</th></tr></thead><tbody>'+
+      u.users.map(function(x){return '<tr>'+
+        '<td>'+x.id+'</td><td>'+x.username+'</td><td>'+x.email+'</td>'+
+        '<td>'+(x.is_admin?'✅':'—')+'</td>'+
+        '<td>'+(x.totp_enabled?'🔒':'—')+'</td>'+
+        '<td>$'+Number(x.balance||0).toFixed(2)+'</td>'+
+        '<td>'+
+          (!x.is_admin?'<button onclick="promote('+x.id+')">Promote</button>':'<button class="danger" onclick="demote('+x.id+')">Demote</button>')+
+          '<button class="danger" onclick="credit('+x.id+')">Credit</button>'+
+        '</td>'+
+      '</tr>'}).join('')+'</tbody></table>'+
+    '</div>'+
+    '<div class="panel"><h2>All Positions ('+p.positions.length+')</h2><table><thead><tr><th>ID</th><th>User</th><th>Symbol</th><th>Side</th><th>Size</th><th>Entry</th><th>Status</th><th>P&L</th></tr></thead><tbody>'+
+      p.positions.map(function(r){return '<tr>'+
+        '<td>'+r.id+'</td><td>'+r.username+'</td><td>'+r.symbol+'</td>'+
+        '<td>'+r.side+'</td><td>'+r.size+'</td><td>'+r.entry_price+'</td>'+
+        '<td>'+r.status+'</td><td>'+(r.pnl!=null?Number(r.pnl).toFixed(2):'—')+'</td>'+
+      '</tr>'}).join('')+'</tbody></table>'+
+    '</div>';
+}
+window.promote=async function(id){await fetch('/api/admin/users/'+id+'/promote',{method:'POST'});load()};
+window.demote=async function(id){if(!confirm('Demote?'))return;await fetch('/api/admin/users/'+id+'/demote',{method:'POST'});load()};
+window.credit=async function(id){
+  var amount=prompt('Amount (USD):','10000');
+  if(!amount)return;
+  await fetch('/api/admin/users/'+id+'/credit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount:Number(amount)})});
+  load();
+};
+load();
+</script></body></html>
