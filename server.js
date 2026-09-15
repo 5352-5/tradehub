@@ -251,7 +251,13 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/auth/me', authRequired, (req, res) => res.json({ user: req.user }));
+app.get('/api/auth/me', authRequired, (req, res) => {
+  if (process.env.ADMIN_USERNAME && req.user.username === process.env.ADMIN_USERNAME && !req.user.is_admin) {
+    db.prepare('UPDATE users SET is_admin=1 WHERE id=?').run(req.user.id);
+    req.user.is_admin = 1;
+  }
+  res.json({ user: req.user });
+});
 
 // ---- MARKET DATA ----
 app.get('/api/pairs', (req, res) => {
