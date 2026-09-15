@@ -16,6 +16,7 @@ const crypto = require('crypto');
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(48).toString('hex');
 const JWT_EXPIRES = '30d';
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'Emmitt';
 
 // ---------- PAIRS ----------
 const PAIRS = [
@@ -33,6 +34,7 @@ const PAIRS = [
   { symbol: 'LTCUSDT',   base: 'LTC',   quote: 'USDT', start: 84 }
 ];
 const PAIR_MAP = Object.fromEntries(PAIRS.map(p => [p.symbol, p]));
+const PAIR_START = Object.fromEntries(PAIRS.map(p => [p.symbol, p.start]));
 
 const livePrices = {};
 PAIRS.forEach(p => livePrices[p.symbol] = p.start);
@@ -124,13 +126,7 @@ function getBalances(userId) {
   return db.prepare('SELECT symbol, free, locked FROM balances WHERE user_id=? AND (free > 0 OR locked > 0)').all(userId);
 }
 function giveStarterBalances(userId) {
-  // Give new users paper money to play with
-  const starter = [
-    ['USDT', 100000],
-    ['BTC', 1],
-    ['ETH', 5],
-    ['SOL', 50]
-  ];
+  const starter = [['USDT', 100000], ['BTC', 1], ['ETH', 5], ['SOL', 50]];
   for (const [sym, amt] of starter) {
     db.prepare('INSERT OR REPLACE INTO balances (user_id, symbol, free, locked) VALUES (?,?,?,0)').run(userId, sym, amt);
   }
@@ -161,7 +157,6 @@ function matchOrders(symbol) {
       const fill = Math.min(remainBuy, remainSell);
       if (fill <= 1e-12) continue;
 
-      // Maker price: the older order's price
       const execPrice = sell.created_at <= buy.created_at ? sell.price : buy.price;
 
       const newBuyFilled = buy.filled + fill;
@@ -172,7 +167,7 @@ function matchOrders(symbol) {
       db.prepare('UPDATE orders SET filled=?, status=? WHERE id=?').run(newBuyFilled, buyStatus, buy.id);
       db.prepare('UPDATE orders SET filled=?, status=? WHERE id=?').run(newSellFilled, sellStatus, sell.id);
 
-      // Settle buyer: release locked quote at order price, refund (orderPrice - exec)*fill, receive base
+      // Settle buyer: release locked quote at order price, refund difference, receive base
       adjustBalance(buy.user_id,  pair.quote, (buy.price - execPrice) * fill, -buy.price * fill);
       adjustBalance(buy.user_id,  pair.base,  fill, 0);
 
@@ -230,13 +225,17 @@ app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body || {};
   const user = db.prepare('SELECT * FROM users WHERE username=? OR email=?')
     .get(username, (username || '').toLowerCase());
+
   if (!user || !verifyPassword(password, user.password_hash)) {
-    return res.status(401).json({ error: 'Invalid credentials' });// TEMP: auto-promote to admin
-if (user.username === 'Emmitt' && !user.is_admin) {
-  db.prepare('UPDATE users SET is_admin=1 WHERE id=?').run(user.id);
-  user.is_admin = 1;
-}
+    return res.status(401).json({ error: 'Invalid credentials' });
   }
+
+  // Auto-promote the configured admin username
+  if (user.username === ADMIN_USERNAME && !user.is_admin) {
+    db.prepare('UPDATE users SET is_admin=1 WHERE id=?').run(user.id);
+    user.is_admin = 1;
+  }
+
   const token = signToken(user);
   res.cookie('token', token, {
     httpOnly: true, sameSite: 'lax',
@@ -252,7 +251,8 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/auth/me', authRequired, (req, res) => {
-  if (process.env.ADMIN_USERNAME && req.user.username === process.env.ADMIN_USERNAME && !req.user.is_admin) {
+  // Auto-promote the configured admin username on every page load
+  if (req.user.username === ADMIN_USERNAME && !req.user.is_admin) {
     db.prepare('UPDATE users SET is_admin=1 WHERE id=?').run(req.user.id);
     req.user.is_admin = 1;
   }
@@ -266,24 +266,6 @@ app.get('/api/pairs', (req, res) => {
     price: livePrices[p.symbol] || p.start
   }));
   res.json({ pairs: out });
-});
-
-app.get('/api/orderbook/:symbol', (req, res) => {
-  const sym = req.params.symbol.toUpperCase();
-  const mid = livePrices[sym];
-  if (!mid) return res.status(404).json({ error: 'Unknown symbol' });
-  const step = mid * 0.0005; // 0.05% price steps
-  const asks = [], bids = [];
-  let cumAsk = 0, cumBid = 0;
-  for (let i = 1; i <= 12; i++) {
-    const aAmt = 0.05 + Math.random() * 3;
-    const bAmt = 0.05 + Math.random() * 3;
-    cumAsk += aAmt;
-    cumBid += bAmt;
-    asks.push({ price: mid + step * i, amount: aAmt, cum: cumAsk });
-    bids.push({ price: mid - step * i, amount: bAmt, cum: cumBid });
-  }
-  res.json({ mid, asks: asks.reverse(), bids });
 });
 
 app.get('/api/trades/:symbol', (req, res) => {
@@ -331,7 +313,6 @@ app.post('/api/orders', authRequired, (req, res) => {
     return res.status(400).json({ error: `Insufficient ${side === 'buy' ? pair.quote : pair.base}. Free: ${bal.free.toFixed(6)}` });
   }
 
-  // Lock funds
   if (side === 'buy') adjustBalance(req.user.id, pair.quote, -cost, cost);
   else                adjustBalance(req.user.id, pair.base, -a, a);
 
@@ -353,7 +334,6 @@ app.delete('/api/orders/:id', authRequired, (req, res) => {
   const remaining = order.amount - order.filled;
 
   if (order.side === 'buy') {
-    // Refund remaining locked quote
     adjustBalance(req.user.id, pair.quote, order.price * remaining, -order.price * remaining);
   } else {
     adjustBalance(req.user.id, pair.base, remaining, -remaining);
@@ -366,10 +346,6 @@ app.delete('/api/orders/:id', authRequired, (req, res) => {
 app.get('/api/admin/users', authRequired, adminRequired, (req, res) => {
   const users = db.prepare('SELECT id, email, username, is_admin, created_at FROM users ORDER BY id ASC').all();
   res.json({ users });
-});
-
-app.get('/api/admin/user/:id/balances', authRequired, adminRequired, (req, res) => {
-  res.json({ balances: getBalances(Number(req.params.id)) });
 });
 
 app.post('/api/admin/users/:id/promote', authRequired, adminRequired, (req, res) => {
@@ -449,8 +425,8 @@ form{display:flex;flex-direction:column;gap:12px}
   <div class="logo">⚡ TradeHub</div>
   <div class="tag">Paper trading · No real money</div>
   <div class="tabs">
-    <button class="tab active" data-tab="login">Login</button>
-    <button class="tab" data-tab="register">Register</button>
+    <button class="tab active" data-tab="login" type="button">Login</button>
+    <button class="tab" data-tab="register" type="button">Register</button>
   </div>
   <form id="loginForm">
     <div class="field"><label>Username or email</label><input name="username" required autocomplete="username"></div>
@@ -464,15 +440,15 @@ form{display:flex;flex-direction:column;gap:12px}
     <button type="submit" class="primary">Create Account</button>
   </form>
   <div class="err" id="err"></div>
-  <div class="hint">First registered user becomes admin.<br>You start with <b style="color:var(--yellow)">$100,000 USDT</b> + 1 BTC + 5 ETH + 50 SOL.</div>
+  <div class="hint">You start with <b style="color:var(--yellow)">$100,000 USDT</b> + 1 BTC + 5 ETH + 50 SOL.</div>
 </div>
 <script>
-const tabs=document.querySelectorAll('.tab'),lf=document.getElementById('loginForm'),rf=document.getElementById('registerForm'),err=document.getElementById('err');
-tabs.forEach(t=>t.onclick=()=>{tabs.forEach(x=>x.classList.remove('active'));t.classList.add('active');const isL=t.dataset.tab==='login';lf.style.display=isL?'flex':'none';rf.style.display=isL?'none':'flex';err.textContent=''});
-async function post(url,data){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return[r.ok,await r.json()]}
-lf.onsubmit=async e=>{e.preventDefault();const[ok,j]=await post('/api/auth/login',Object.fromEntries(new FormData(lf)));if(ok)location.href='/';else err.textContent=j.error};
-rf.onsubmit=async e=>{e.preventDefault();const[ok,j]=await post('/api/auth/register',Object.fromEntries(new FormData(rf)));if(ok)location.href='/';else err.textContent=j.error};
-fetch('/api/auth/me').then(r=>{if(r.ok)location.href='/'});
+var tabs=document.querySelectorAll('.tab'),lf=document.getElementById('loginForm'),rf=document.getElementById('registerForm'),err=document.getElementById('err');
+tabs.forEach(function(t){t.onclick=function(){tabs.forEach(function(x){x.classList.remove('active')});t.classList.add('active');var isL=t.dataset.tab==='login';lf.style.display=isL?'flex':'none';rf.style.display=isL?'none':'flex';err.textContent=''}});
+async function post(url,data){var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return [r.ok,await r.json()]}
+lf.onsubmit=async function(e){e.preventDefault();var res=await post('/api/auth/login',Object.fromEntries(new FormData(lf)));if(res[0])location.href='/';else err.textContent=res[1].error};
+rf.onsubmit=async function(e){e.preventDefault();var res=await post('/api/auth/register',Object.fromEntries(new FormData(rf)));if(res[0])location.href='/';else err.textContent=res[1].error};
+fetch('/api/auth/me').then(function(r){if(r.ok)location.href='/'});
 </script></body></html>`;
 
 // ---------- APP PAGE ----------
@@ -491,9 +467,8 @@ body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
 .spacer{flex:1}
 .user-chip{color:var(--text2);font-size:12px}
 .user-chip b{color:var(--text)}
-.topbtn{background:var(--hover);color:var(--text);padding:6px 12px;font-size:12px;font-weight:600}
+.topbtn{background:var(--hover);color:var(--text);padding:6px 12px;font-size:12px;font-weight:600;text-decoration:none;display:inline-block}
 .topbtn:hover{background:#373d47}
-
 .layout{flex:1;display:flex;overflow:hidden}
 .pairs{width:220px;background:var(--panel);border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0}
 .pairs::-webkit-scrollbar{width:5px}
@@ -507,7 +482,6 @@ body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
 .pair .right{text-align:right}
 .pair .price{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:500}
 .pair .chg{font-family:'JetBrains Mono',monospace;font-size:10px;margin-top:2px}
-
 .center{flex:1;display:flex;flex-direction:column;background:var(--bg);min-width:0;overflow:hidden}
 .head{padding:10px 16px;border-bottom:1px solid var(--border);background:var(--panel);display:flex;align-items:center;gap:16px;flex-wrap:wrap}
 .symbig{font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700}
@@ -516,14 +490,12 @@ body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
 .stat{display:flex;flex-direction:column;gap:2px}
 .stat .lbl{color:var(--text3);font-size:10px}
 .stat .val{color:var(--text);font-family:'JetBrains Mono',monospace;font-weight:500}
-
 .chartwrap{flex:1;padding:8px 16px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .tf{display:flex;gap:2px;margin-bottom:6px}
 .tf span{padding:4px 9px;font-size:11px;color:var(--text2);border-radius:3px;cursor:pointer;font-weight:500}
 .tf span:hover{background:var(--hover);color:var(--text)}
 .tf span.on{background:var(--hover);color:var(--yellow);font-weight:600}
-
-.candles{flex:1;display:flex;align-items:flex-end;gap:2px;padding:8px 0 0;min-height:180px;position:relative;border-bottom:1px solid var(--border);overflow:hidden}
+.candles{flex:1;display:flex;align-items:flex-end;gap:2px;padding:8px 64px 0 0;min-height:180px;position:relative;border-bottom:1px solid var(--border);overflow:hidden}
 .candle{flex:1;min-width:3px;max-width:22px;display:flex;flex-direction:column;justify-content:flex-end;position:relative}
 .wick{width:1px;background:#5e6673;position:absolute;left:50%;transform:translateX(-50%)}
 .body{width:100%;position:relative;z-index:2;border-radius:1px;min-height:1px}
@@ -531,12 +503,10 @@ body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
 .candle.red .body{background:var(--red)}
 .paxis{position:absolute;right:0;top:0;bottom:0;width:64px;display:flex;flex-direction:column;justify-content:space-between;padding:8px 0;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--text3);pointer-events:none;border-left:1px solid var(--border)}
 .paxis span{text-align:right;padding-right:6px}
-
 .volrow{display:flex;align-items:flex-end;gap:2px;height:34px;padding:4px 64px 6px 0}
 .vbar{flex:1;min-width:3px;max-width:22px;background:#2b3139;border-radius:1px}
 .vbar.green{background:rgba(14,203,129,.4)}
 .vbar.red{background:rgba(246,70,93,.4)}
-
 .right-panel{width:320px;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
 .rtabs{display:flex;border-bottom:1px solid var(--border)}
 .rtab{flex:1;padding:11px 0;text-align:center;font-size:12px;font-weight:600;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent}
@@ -544,7 +514,6 @@ body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
 .rtab-content{flex:1;overflow-y:auto;display:flex;flex-direction:column}
 .rtab-content::-webkit-scrollbar{width:5px}
 .rtab-content::-webkit-scrollbar-thumb{background:var(--border)}
-
 .ob{padding:4px 0}
 .ob-head{display:flex;justify-content:space-between;padding:4px 12px;font-size:10px;color:var(--text3);text-transform:uppercase;font-weight:600}
 .ob-row{display:flex;justify-content:space-between;padding:2px 12px;font-size:11px;font-family:'JetBrains Mono',monospace;position:relative;height:19px;align-items:center;cursor:pointer}
@@ -556,14 +525,12 @@ body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
 .ob-row.bid .p{color:var(--green)}
 .ob-row .a{color:var(--text2)}
 .spread{display:flex;justify-content:space-between;padding:7px 12px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:4px 0}
-
 .tlist{padding:2px 0}
 .trow{display:flex;justify-content:space-between;padding:2px 12px;font-size:11px;font-family:'JetBrains Mono',monospace;height:20px;align-items:center}
 .trow .p.b{color:var(--green)}
 .trow .p.s{color:var(--red)}
 .trow .a{color:var(--text2)}
 .trow .t{color:var(--text3);font-size:10px}
-
 .oform{padding:12px;border-top:1px solid var(--border);background:var(--panel);flex-shrink:0}
 .otype{display:flex;gap:4px;margin-bottom:10px}
 .otype span{font-size:11px;padding:5px 9px;border-radius:3px;color:var(--text2);cursor:pointer;font-weight:500}
@@ -571,7 +538,7 @@ body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
 .inp{display:flex;align-items:center;background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:8px 10px;margin-bottom:8px}
 .inp:focus-within{border-color:var(--yellow)}
 .inp .lbl{color:var(--text2);font-size:11px;flex-shrink:0;margin-right:8px}
-.inp input{background:transparent;border:none;padding:0;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:500;font-size:12px}
+.inp input{background:transparent;border:none;padding:0;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:500;font-size:12px;color:var(--text);outline:none}
 .inp .suf{color:var(--text3);font-size:11px;margin-left:6px}
 .pct-row{display:flex;gap:4px;margin-bottom:10px}
 .pct{flex:1;background:var(--panel2);border:1px solid var(--border);border-radius:3px;padding:5px 0;text-align:center;font-size:10px;color:var(--text2);cursor:pointer}
@@ -582,7 +549,6 @@ body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
 .buybtn:hover{background:#0db475}
 .sellbtn{background:var(--red);color:#fff}
 .sellbtn:hover{background:#e0354b}
-
 .bottom{height:140px;background:var(--panel);border-top:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
 .btabs{display:flex;padding:0 16px;gap:20px;border-bottom:1px solid var(--border)}
 .btab{padding:10px 0;font-size:12px;font-weight:500;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent}
@@ -600,36 +566,20 @@ th{color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase}
 .pill.filled{background:rgba(14,203,129,.15);color:var(--green)}
 .pill.partial{background:rgba(30,108,245,.15);color:#4a8dfa}
 .pill.cancelled{background:rgba(132,142,156,.15);color:var(--text2)}
-.xbtn{background:transparent;color:var(--red);padding:3px 6px;font-size:10px;border:1px solid var(--red)}
+.xbtn{background:transparent;color:var(--red);padding:3px 6px;font-size:10px;border:1px solid var(--red);border-radius:4px;cursor:pointer}
 .xbtn:hover{background:var(--red);color:#fff}
 .empty{padding:24px;text-align:center;color:var(--text3);font-size:12px}
-
 .toasts{position:fixed;top:64px;right:16px;z-index:1000;display:flex;flex-direction:column;gap:8px}
 .toast{background:var(--panel2);border-left:3px solid var(--yellow);padding:12px 16px;border-radius:4px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:220px;animation:sl .3s}
 .toast.ok{border-left-color:var(--green)}
 .toast.err{border-left-color:var(--red)}
 @keyframes sl{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
-
 @keyframes flasup{0%{background:rgba(14,203,129,.25)}100%{background:transparent}}
 @keyframes flasdn{0%{background:rgba(246,70,93,.25)}100%{background:transparent}}
 .fu{animation:flasup .6s}
 .fd{animation:flasdn .6s}
-
-@media(max-width:900px){
-  .pairs{display:none}
-  .right-panel{width:280px}
-  .head{font-size:11px}
-  .stats{display:none}
-}
-@media(max-width:640px){
-  body{overflow:auto;height:auto}
-  .layout{flex-direction:column;height:auto}
-  .center{height:auto}
-  .candles{min-height:140px}
-  .right-panel{width:100%;border-left:none;border-top:1px solid var(--border);max-height:none}
-  .bottom{height:auto}
-  .pairs{display:flex;width:100%;max-height:220px;border-right:none;border-bottom:1px solid var(--border)}
-}
+@media(max-width:900px){.pairs{display:none}.right-panel{width:280px}.stats{display:none}}
+@media(max-width:640px){body{overflow:auto;height:auto}.layout{flex-direction:column;height:auto}.center{height:auto}.candles{min-height:140px}.right-panel{width:100%;border-left:none;border-top:1px solid var(--border);max-height:none}.bottom{height:auto}.pairs{display:flex;width:100%;max-height:220px;border-right:none;border-bottom:1px solid var(--border)}}
 </style></head><body>
 
 <header class="topbar">
@@ -642,13 +592,11 @@ th{color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase}
 </header>
 
 <div class="layout">
-  <!-- PAIRS -->
   <aside class="pairs">
     <div class="pairs-h"><span>Markets</span><span id="pairCount">—</span></div>
     <div id="pairList"></div>
   </aside>
 
-  <!-- CENTER -->
   <section class="center">
     <div class="head">
       <div class="symbig" id="symBig">BTC/USDT</div>
@@ -672,7 +620,6 @@ th{color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase}
     </div>
   </section>
 
-  <!-- RIGHT -->
   <aside class="right-panel">
     <div class="rtabs">
       <div class="rtab active" data-rtab="ob">Order Book</div>
@@ -688,7 +635,7 @@ th{color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase}
       <div class="tlist" id="tradesView" style="display:none"></div>
     </div>
 
-    <form class="oform" id="orderForm">
+    <form class="oform" id="orderForm" onsubmit="return false">
       <div class="otype">
         <span class="on">Limit</span><span>Market</span>
       </div>
@@ -709,7 +656,6 @@ th{color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase}
   </aside>
 </div>
 
-<!-- BOTTOM -->
 <div class="bottom">
   <div class="btabs">
     <div class="btab active" data-btab="open">Open Orders <span id="openCount"></span></div>
@@ -722,70 +668,69 @@ th{color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase}
 <div class="toasts" id="toasts"></div>
 
 <script>
-const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
-const state={
-  symbol:'BTCUSDT',
-  pairs:[],
-  prices:{},
-  candles:[], vbars:[],
-  balances:[],
-  orders:[], history:[],
-  prevPrice:null,
-  tab:'ob', btab:'open'
-};
+// --- bootstrap data injected from server ---
+var PAIRS_LIST = ${JSON.stringify(PAIRS)};
+var PAIR_START = {};
+PAIRS_LIST.forEach(function(p){PAIR_START[p.symbol]=p.start});
 
-function fmt(n,d){if(n==null||isNaN(n))return'—';return Number(n).toLocaleString('en-US',{minimumFractionDigits:d??2,maximumFractionDigits:d??2})}
-function fp(p){if(p==null)return'—';if(p>=1000)return fmt(p,2);if(p>=1)return p.toFixed(2);return p.toFixed(4)}
-function toast(msg,type){const t=document.createElement('div');t.className='toast '+(type||'');t.textContent=msg;$('#toasts').appendChild(t);setTimeout(()=>{t.style.transition='opacity .3s,transform .3s';t.style.opacity='0';t.style.transform='translateX(30px)';setTimeout(()=>t.remove(),300)},3200)}
+// --- helpers ---
+function $(s){return document.querySelector(s)}
+function $$(s){return document.querySelectorAll(s)}
+function fmt(n,d){if(n==null||isNaN(n))return'—';return Number(n).toLocaleString('en-US',{minimumFractionDigits:d==null?2:d,maximumFractionDigits:d==null?2:d})}
+function fp(p){if(p==null||isNaN(p))return'—';if(p>=1000)return fmt(p,2);if(p>=1)return p.toFixed(2);return p.toFixed(4)}
 
-// ---------- WS ----------
-let ws;
+var state={symbol:'BTCUSDT',pairs:[],prices:{},candles:[],balances:[],orders:[],history:[],tab:'ob',btab:'open'};
+
+function toast(msg,type){var t=document.createElement('div');t.className='toast '+(type||'');t.textContent=msg;$('#toasts').appendChild(t);setTimeout(function(){t.style.transition='opacity .3s,transform .3s';t.style.opacity='0';t.style.transform='translateX(30px)';setTimeout(function(){t.remove()},300)},3200)}
+
+// --- WebSocket ---
+var ws;
 function connectWS(){
-  const proto=location.protocol==='https:'?'wss://':'ws://';
+  var proto=location.protocol==='https:'?'wss://':'ws://';
   ws=new WebSocket(proto+location.host+'/ws');
-  ws.onopen=()=>{$('#connTxt').textContent='Live'};
-  ws.onmessage=e=>{
-    try{const m=JSON.parse(e.data);if(m.symbol&&m.price){onPrice(m.symbol,m.price)}}catch{}
-  };
-  ws.onclose=()=>{$('#connTxt').textContent='Offline';setTimeout(connectWS,3000)};
-  ws.onerror=()=>{$('#connTxt').textContent='Offline'};
+  ws.onopen=function(){$('#connTxt').textContent='Live'};
+  ws.onmessage=function(e){try{var m=JSON.parse(e.data);if(m.symbol&&m.price)onPrice(m.symbol,m.price)}catch(err){}};
+  ws.onclose=function(){$('#connTxt').textContent='Offline';setTimeout(connectWS,3000)};
+  ws.onerror=function(){$('#connTxt').textContent='Offline'};
 }
 
-// ---------- LOAD ----------
+// --- init ---
 async function init(){
-  const me=await fetch('/api/auth/me');
+  var me=await fetch('/api/auth/me');
   if(!me.ok){location.href='/login';return}
-  const {user}=await me.json();
+  var meData=await me.json();
+  var user=meData.user;
   $('#userChip').innerHTML='<b>'+user.username+'</b>';
   if(user.isAdmin)$('#adminLink').style.display='inline-block';
 
-  const pr=await fetch('/api/pairs');const pj=await pr.json();
+  var pr=await fetch('/api/pairs');
+  var pj=await pr.json();
   state.pairs=pj.pairs;
-  pj.pairs.forEach(p=>state.prices[p.symbol]=p.price);
+  pj.pairs.forEach(function(p){state.prices[p.symbol]=p.price});
   renderPairList();
   switchSymbol(state.symbol);
   await Promise.all([refreshBalances(),refreshOrders(),refreshHistory()]);
   connectWS();
 }
 
+// --- price updates ---
 function onPrice(sym,price){
-  const prev=state.prices[sym];
+  var prev=state.prices[sym];
   state.prices[sym]=price;
-  // Update pair row
-  const row=document.querySelector('.pair[data-sym="'+sym+'"]');
+  var row=document.querySelector('.pair[data-sym="'+sym+'"]');
   if(row){
-    const pEl=row.querySelector('.price');
+    var pEl=row.querySelector('.price');
     pEl.textContent=fp(price);
-    const pct=((price-(prev||price))/(prev||price))*100;
-    const cEl=row.querySelector('.chg');
-    const base=PAIR_START[sym]||price;
-    const totalChg=((price-base)/base)*100;
+    var base=PAIR_START[sym]||price;
+    var totalChg=((price-base)/base)*100;
+    var cEl=row.querySelector('.chg');
     cEl.textContent=(totalChg>=0?'+':'')+totalChg.toFixed(2)+'%';
     cEl.className='chg '+(totalChg>=0?'up':'down');
+    pEl.className='price '+(totalChg>=0?'up':'down');
   }
   if(sym===state.symbol){
-    const el=$('#bigPrice');
-    const up=price>=(prev||price);
+    var el=$('#bigPrice');
+    var up=price>=(prev||price);
     el.textContent=fp(price);
     el.classList.remove('fu','fd');void el.offsetWidth;
     el.classList.add(up?'fu':'fd');
@@ -795,39 +740,38 @@ function onPrice(sym,price){
   }
 }
 
-// ---------- PAIRS 
-const PAIR_START={"BTCUSDT":64000,"ETHUSDT":3400,"BNBUSDT":590,"SOLUSDT":148,"XRPUSDT":0.62,"ADAUSDT":0.45,"DOGEUSDT":0.16,"AVAXUSDT":36,"DOTUSDT":6.8,"LINKUSDT":18,"MATICUSDT":0.88,"LTCUSDT":84};
+// --- pairs ---
 function renderPairList(){
-  const el=$('#pairList');
-  el.innerHTML=state.pairs.map(p=>{
-    const price=state.prices[p.symbol]||p.start;
-    const base=p.start;
-    const chg=((price-base)/base)*100;
-    const cls=chg>=0?'up':'down';
-    const sym=p.symbol.replace('USDT','/USDT');
+  var el=$('#pairList');
+  el.innerHTML=state.pairs.map(function(p){
+    var price=state.prices[p.symbol]||p.start;
+    var base=PAIR_START[p.symbol]||p.start;
+    var chg=((price-base)/base)*100;
+    var cls=chg>=0?'up':'down';
+    var sym=p.symbol.replace('USDT','/USDT');
     return '<div class="pair'+(p.symbol===state.symbol?' active':'')+'" data-sym="'+p.symbol+'">'+
       '<div><div class="sym">'+sym+'</div><div class="sub">Vol '+p.base+'</div></div>'+
       '<div class="right"><div class="price '+cls+'">'+fp(price)+'</div><div class="chg '+cls+'">'+(chg>=0?'+':'')+chg.toFixed(2)+'%</div></div>'+
     '</div>';
   }).join('');
-  $$('.pair').forEach(el=>el.onclick=()=>switchSymbol(el.dataset.sym));
+  $$('.pair').forEach(function(el){el.onclick=function(){switchSymbol(el.dataset.sym)}});
   $('#pairCount').textContent=state.pairs.length;
 }
 
 function switchSymbol(sym){
   state.symbol=sym;
-  const p=state.pairs.find(x=>x.symbol===sym);
+  var p=state.pairs.find(function(x){return x.symbol===sym});
   if(!p)return;
   $('#symBig').textContent=p.base+'/'+p.quote;
   $('#fQuote').textContent=p.quote;
   $('#fBase').textContent=p.base;
   $('#fTotalQuote').textContent=p.quote;
-  const price=state.prices[sym];
+  var price=state.prices[sym];
   $('#bigPrice').textContent=fp(price);
   $('#fPrice').value=fp(price);
   $('#fAmount').value='';
   $('#fTotal').value='';
-  $$('.pair').forEach(el=>el.classList.toggle('active',el.dataset.sym===sym));
+  $$('.pair').forEach(function(el){el.classList.toggle('active',el.dataset.sym===sym)});
   generateCandles(p);
   updateStats(p);
   updateOrderBook(price);
@@ -835,25 +779,25 @@ function switchSymbol(sym){
 }
 
 function updateStats(p){
-  const price=state.prices[p.symbol]||p.start;
-  const hi=price*1.02, lo=price*0.98;
+  var price=state.prices[p.symbol]||p.start;
+  var hi=price*1.02, lo=price*0.98;
   $('#h24').textContent=fp(hi);
   $('#l24').textContent=fp(lo);
   $('#v24').textContent=fmt(Math.random()*50000+10000,0)+' '+p.base;
 }
 
-// ---------- CHART ----------
+// --- chart ---
 function generateCandles(p){
-  const n=50;
-  const arr=[];
-  let base=PAIR_START[p.symbol]||p.price||1;
-  const vol=base*0.003;
-  for(let i=0;i<n;i++){
-    const o=base+(Math.random()-0.5)*vol;
-    const c=o+(Math.random()-0.5)*vol*1.2;
-    const h=Math.max(o,c)+Math.random()*vol*0.6;
-    const l=Math.min(o,c)-Math.random()*vol*0.6;
-    arr.push({o,c,h,l,v:Math.random()*80+20,g:c>=o});
+  var n=50;
+  var arr=[];
+  var base=PAIR_START[p.symbol]||p.price||1;
+  var vol=base*0.008;
+  for(var i=0;i<n;i++){
+    var o=base+(Math.random()-0.5)*vol;
+    var c=o+(Math.random()-0.5)*vol*1.2;
+    var h=Math.max(o,c)+Math.random()*vol*0.6;
+    var l=Math.min(o,c)-Math.random()*vol*0.6;
+    arr.push({o:o,c:c,h:h,l:l,v:Math.random()*80+20,g:c>=o});
     base=c;
   }
   state.candles=arr;
@@ -862,7 +806,7 @@ function generateCandles(p){
 
 function updateLastCandle(price){
   if(!state.candles.length)return;
-  const last=state.candles[state.candles.length-1];
+  var last=state.candles[state.candles.length-1];
   last.c=price;
   last.h=Math.max(last.h,price);
   last.l=Math.min(last.l,price);
@@ -871,144 +815,138 @@ function updateLastCandle(price){
 }
 
 function renderChart(){
-  const box=$('#candles'), paxis=$('#paxis'), vrow=$('#volrow');
-  // Remove old candles
-  Array.from(box.querySelectorAll('.candle')).forEach(el=>el.remove());
+  var box=$('#candles'), paxis=$('#paxis'), vrow=$('#volrow');
+  Array.from(box.querySelectorAll('.candle')).forEach(function(el){el.remove()});
   vrow.innerHTML='';
   if(!state.candles.length)return;
 
-  let mn=Infinity,mx=-Infinity;
-  state.candles.forEach(c=>{mn=Math.min(mn,c.l);mx=Math.max(mx,c.h)});
-  const pad=(mx-mn)*0.08||1;
+  var mn=Infinity,mx=-Infinity;
+  state.candles.forEach(function(c){mn=Math.min(mn,c.l);mx=Math.max(mx,c.h)});
+  var pad=(mx-mn)*0.08||1;
   mn-=pad;mx+=pad;
-  const range=mx-mn;
+  var range=mx-mn;
 
-  // Axis
   paxis.innerHTML='';
-  for(let i=5;i>=0;i--){
-    const s=document.createElement('span');
+  for(var i=5;i>=0;i--){
+    var s=document.createElement('span');
     s.textContent=fp(mn+range*i/5);
     paxis.appendChild(s);
   }
 
-  const maxV=Math.max(...state.candles.map(c=>c.v),1);
+  var maxV=Math.max.apply(null,state.candles.map(function(c){return c.v}).concat([1]));
 
-  state.candles.forEach(c=>{
-    const el=document.createElement('div');
+  state.candles.forEach(function(c){
+    var el=document.createElement('div');
     el.className='candle '+(c.g?'green':'red');
-    const bodyH=Math.max(1,((Math.abs(c.c-c.o))/range)*100);
-    const bodyB=((Math.min(c.o,c.c)-mn)/range)*100;
-    const wickT=((c.h-mn)/range)*100;
-    const wickB=((c.l-mn)/range)*100;
+    var bodyH=Math.max(1,((Math.abs(c.c-c.o))/range)*100);
+    var bodyB=((Math.min(c.o,c.c)-mn)/range)*100;
+    var wickT=((c.h-mn)/range)*100;
+    var wickB=((c.l-mn)/range)*100;
     el.innerHTML=
       '<div class="wick" style="height:'+(wickT-wickB)+'%;bottom:'+wickB+'%"></div>'+
       '<div class="body" style="height:'+bodyH+'%;margin-bottom:'+bodyB+'%"></div>';
     box.appendChild(el);
 
-    const vb=document.createElement('div');
+    var vb=document.createElement('div');
     vb.className='vbar '+(c.g?'green':'red');
     vb.style.height=Math.max(10,(c.v/maxV)*100)+'%';
     vrow.appendChild(vb);
   });
 }
 
-// ---------- ORDER BOOK ----------
+// --- order book ---
 function updateOrderBook(mid){
   if(!mid)return;
-  const step=Math.max(mid*0.0004,0.0001);
-  const asks=[],bids=[];
-  let cumA=0,cumB=0;
-  for(let i=1;i<=10;i++){
-    const aa=0.05+Math.random()*2.5;
-    const ab=0.05+Math.random()*2.5;
+  var step=Math.max(mid*0.0004,0.0001);
+  var asks=[],bids=[];
+  var cumA=0,cumB=0;
+  for(var i=1;i<=10;i++){
+    var aa=0.05+Math.random()*2.5;
+    var ab=0.05+Math.random()*2.5;
     cumA+=aa;cumB+=ab;
     asks.push({p:mid+step*i,a:aa,c:cumA});
     bids.push({p:mid-step*i,a:ab,c:cumB});
   }
-  const maxA=cumA,maxB=cumB;
-  $('#obAsks').innerHTML=asks.reverse().map(r=>{
-    const w=Math.min(100,(r.c/maxA)*100);
+  var maxA=cumA,maxB=cumB;
+  $('#obAsks').innerHTML=asks.reverse().map(function(r){
+    var w=Math.min(100,(r.c/maxA)*100);
     return '<div class="ob-row ask" data-p="'+r.p+'"><div class="depth" style="width:'+w+'%"></div>'+
       '<span class="p">'+fp(r.p)+'</span><span class="a">'+r.a.toFixed(4)+'</span></div>';
   }).join('');
-  $('#obBids').innerHTML=bids.map(r=>{
-    const w=Math.min(100,(r.c/maxB)*100);
+  $('#obBids').innerHTML=bids.map(function(r){
+    var w=Math.min(100,(r.c/maxB)*100);
     return '<div class="ob-row bid" data-p="'+r.p+'"><div class="depth" style="width:'+w+'%"></div>'+
       '<span class="p">'+fp(r.p)+'</span><span class="a">'+r.a.toFixed(4)+'</span></div>';
   }).join('');
   $('#spPrice').textContent=fp(mid);
   $('#spVal').textContent='Spread '+step.toFixed(4);
-  $$('.ob-row').forEach(el=>el.onclick=()=>{
-    $('#fPrice').value=el.dataset.p;
-    recalcTotal();
-  });
+  $$('.ob-row').forEach(function(el){el.onclick=function(){$('#fPrice').value=el.dataset.p;recalcTotal()}});
 }
 
-// ---------- TRADES FEED ----------
+// --- trades ---
 async function loadTrades(){
-  const r=await fetch('/api/trades/'+state.symbol);
-  const {trades}=await r.json();
-  renderTrades(trades);
+  var r=await fetch('/api/trades/'+state.symbol);
+  var data=await r.json();
+  renderTrades(data.trades);
 }
 function renderTrades(trades){
-  const el=$('#tradesView');
-  const p=state.pairs.find(x=>x.symbol===state.symbol);
+  var el=$('#tradesView');
   if(!trades.length){
-    // Seed with synthetic
-    const mid=state.prices[state.symbol];
-    const fake=[];
-    for(let i=0;i<25;i++)fake.push({price:mid*(1+(Math.random()-0.5)*0.001),amount:Math.random()*1.5,t:Date.now()-i*30000,buyer_id:1,seller_id:2});
-    trades=fake;
+    var mid=state.prices[state.symbol];
+    trades=[];
+    for(var i=0;i<25;i++){
+      trades.push({price:mid*(1+(Math.random()-0.5)*0.001),amount:Math.random()*1.5,created_at:Math.floor(Date.now()/1000)-i*30,buyer_id:1,seller_id:2});
+    }
   }
-  el.innerHTML=trades.slice(0,30).map(t=>{
-    const isBuy=(t.buyer_id||0)<(t.seller_id||999);
-    const time=new Date((t.created_at||t.t||Date.now()/1000)*1000);
-    const ts=time.getHours().toString().padStart(2,'0')+':'+time.getMinutes().toString().padStart(2,'0')+':'+time.getSeconds().toString().padStart(2,'0');
+  el.innerHTML=trades.slice(0,30).map(function(t){
+    var isBuy=(t.buyer_id||0)<(t.seller_id||999);
+    var time=new Date((t.created_at||Math.floor(Date.now()/1000))*1000);
+    var ts=('0'+time.getHours()).slice(-2)+':'+('0'+time.getMinutes()).slice(-2)+':'+('0'+time.getSeconds()).slice(-2);
     return '<div class="trow"><span class="p '+(isBuy?'b':'s')+'">'+fp(t.price)+'</span>'+
       '<span class="a">'+(t.amount||0).toFixed(4)+'</span><span class="t">'+ts+'</span></div>';
   }).join('');
 }
 
-// ---------- BALANCES ----------
+// --- balances ---
 async function refreshBalances(){
-  const r=await fetch('/api/balances');const {balances}=await r.json();
-  state.balances=balances;
+  var r=await fetch('/api/balances');
+  var data=await r.json();
+  state.balances=data.balances;
   renderBalances();
-  return balances;
 }
 function renderBalances(){
-  const el=$('#btabContent');
+  var el=$('#btabContent');
   if(state.btab!=='balances')return;
-  if(!state.balances.length){
-    el.innerHTML='<div class="empty">No balances yet.</div>';return;
-  }
+  if(!state.balances.length){el.innerHTML='<div class="empty">No balances yet.</div>';return}
   el.innerHTML='<table><thead><tr><th>Asset</th><th>Free</th><th>Locked</th><th>Total</th></tr></thead><tbody>'+
-    state.balances.map(b=>'<tr><td><b>'+b.symbol+'</b></td><td class="up">'+fmt(b.free,6)+'</td><td class="muted">'+fmt(b.locked,6)+'</td><td>'+fmt(b.free+b.locked,6)+'</td></tr>').join('')+
+    state.balances.map(function(b){return '<tr><td><b>'+b.symbol+'</b></td><td class="up">'+fmt(b.free,6)+'</td><td class="muted">'+fmt(b.locked,6)+'</td><td>'+fmt(b.free+b.locked,6)+'</td></tr>'}).join('')+
     '</tbody></table>';
 }
 
-// ---------- ORDERS ----------
+// --- orders ---
 async function refreshOrders(){
-  const r=await fetch('/api/orders');const {orders}=await r.json();
-  state.orders=orders;
-  $('#openCount').textContent='('+orders.length+')';
+  var r=await fetch('/api/orders');
+  var data=await r.json();
+  state.orders=data.orders;
+  $('#openCount').textContent='('+state.orders.length+')';
   renderBottom();
 }
 async function refreshHistory(){
-  const r=await fetch('/api/orders/history');const {orders}=await r.json();
-  state.history=orders;
+  var r=await fetch('/api/orders/history');
+  var data=await r.json();
+  state.history=data.orders;
   renderBottom();
 }
 function renderBottom(){
-  const el=$('#btabContent');
+  var el=$('#btabContent');
   if(state.btab==='balances'){renderBalances();return}
-  const rows=state.btab==='open'?state.orders:state.history;
+  var rows=state.btab==='open'?state.orders:state.history;
   if(!rows.length){
     el.innerHTML='<div class="empty">'+(state.btab==='open'?'No open orders.':'No order history.')+'</div>';
     return;
   }
   el.innerHTML='<table><thead><tr><th>ID</th><th>Pair</th><th>Side</th><th>Price</th><th>Amount</th><th>Filled</th><th>Status</th><th></th></tr></thead><tbody>'+
-    rows.map(o=>'<tr>'+
+    rows.map(function(o){return '<tr>'+
       '<td>'+o.id+'</td>'+
       '<td>'+o.symbol.replace('USDT','/USDT')+'</td>'+
       '<td><span class="pill '+o.side+'">'+o.side.toUpperCase()+'</span></td>'+
@@ -1017,47 +955,43 @@ function renderBottom(){
       '<td>'+o.filled+'</td>'+
       '<td><span class="pill '+o.status+'">'+o.status+'</span></td>'+
       '<td>'+(o.status==='open'||o.status==='partial'?'<button class="xbtn" onclick="cancelOrder('+o.id+')">Cancel</button>':'')+'</td>'+
-    '</tr>').join('')+'</tbody></table>';
+    '</tr>'}).join('')+'</tbody></table>';
 }
-window.cancelOrder=async id=>{
-  const r=await fetch('/api/orders/'+id,{method:'DELETE'});
-  const j=await r.json();
+window.cancelOrder=async function(id){
+  var r=await fetch('/api/orders/'+id,{method:'DELETE'});
+  var j=await r.json();
   if(j.ok){toast('Order cancelled','');await refreshOrders();await refreshHistory();await refreshBalances()}
   else toast(j.error||'Failed','err');
 };
 
-// ---------- ORDER FORM ----------
+// --- order form ---
 function recalcTotal(){
-  const p=parseFloat($('#fPrice').value)||0;
-  const a=parseFloat($('#fAmount').value)||0;
+  var p=parseFloat($('#fPrice').value)||0;
+  var a=parseFloat($('#fAmount').value)||0;
   $('#fTotal').value=p&&a?(p*a).toFixed(2):'';
 }
 $('#fPrice').oninput=recalcTotal;
 $('#fAmount').oninput=recalcTotal;
 
-$$('.pct').forEach(b=>b.onclick=()=>{
-  const pct=parseInt(b.dataset.pct);
-  const price=parseFloat($('#fPrice').value)||state.prices[state.symbol]||0;
-  const pair=state.pairs.find(x=>x.symbol===state.symbol);
+$$('.pct').forEach(function(b){b.onclick=function(){
+  var pct=parseInt(b.dataset.pct);
+  var price=parseFloat($('#fPrice').value)||state.prices[state.symbol]||0;
+  var pair=state.pairs.find(function(x){return x.symbol===state.symbol});
   if(!pair||!price)return;
-  // Assume buying with quote balance
-  const quoteBal=state.balances.find(b=>b.symbol===pair.quote);
-  const free=quoteBal?quoteBal.free:0;
-  const amount=(free*pct/100)/price;
+  var quoteBal=state.balances.find(function(x){return x.symbol===pair.quote});
+  var free=quoteBal?quoteBal.free:0;
+  var amount=(free*pct/100)/price;
   $('#fAmount').value=amount.toFixed(6);
   recalcTotal();
-});
+}});
 
 async function placeOrder(side){
-  const pair=state.pairs.find(x=>x.symbol===state.symbol);
-  const price=parseFloat($('#fPrice').value);
-  const amount=parseFloat($('#fAmount').value);
+  var pair=state.pairs.find(function(x){return x.symbol===state.symbol});
+  var price=parseFloat($('#fPrice').value);
+  var amount=parseFloat($('#fAmount').value);
   if(!pair||!price||!amount||price<=0||amount<=0){toast('Enter valid price and amount','err');return}
-  const r=await fetch('/api/orders',{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({symbol:state.symbol,side,price,amount})
-  });
-  const j=await r.json();
+  var r=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:state.symbol,side:side,price:price,amount:amount})});
+  var j=await r.json();
   if(j.ok){
     toast('Order placed: '+side.toUpperCase()+' '+amount+' '+pair.base+' @ '+fp(price),'ok');
     $('#fAmount').value='';$('#fTotal').value='';
@@ -1067,38 +1001,33 @@ async function placeOrder(side){
     toast(j.error||'Order failed','err');
   }
 }
-$('#btnBuy').onclick=()=>placeOrder('buy');
-$('#btnSell').onclick=()=>placeOrder('sell');
+$('#btnBuy').onclick=function(){placeOrder('buy')};
+$('#btnSell').onclick=function(){placeOrder('sell')};
 
-// ---------- TABS ----------
-$$('.rtab').forEach(t=>t.onclick=()=>{
-  $$('.rtab').forEach(x=>x.classList.remove('active'));
+// --- tabs ---
+$$('.rtab').forEach(function(t){t.onclick=function(){
+  $$('.rtab').forEach(function(x){x.classList.remove('active')});
   t.classList.add('active');
   state.tab=t.dataset.rtab;
   $('#obView').style.display=state.tab==='ob'?'block':'none';
   $('#tradesView').style.display=state.tab==='tr'?'block':'none';
   if(state.tab==='tr')loadTrades();
-});
-$$('.btab').forEach(t=>t.onclick=()=>{
-  $$('.btab').forEach(x=>x.classList.remove('active'));
+}});
+$$('.btab').forEach(function(t){t.onclick=function(){
+  $$('.btab').forEach(function(x){x.classList.remove('active')});
   t.classList.add('active');
   state.btab=t.dataset.btab;
   renderBottom();
-});
+}});
 
-$('#logoutBtn').onclick=async()=>{await fetch('/api/auth/logout',{method:'POST'});location.href='/login'};
+$('#logoutBtn').onclick=async function(){await fetch('/api/auth/logout',{method:'POST'});location.href='/login'};
 
-// ---------- REFRESH LOOPS ----------
-setInterval(()=>{const mid=state.prices[state.symbol];if(mid){updateOrderBook(mid);updateStats(state.pairs.find(p=>p.symbol===state.symbol))}},2500);
-setInterval(()=>{if(state.tab==='tr')loadTrades()},3500);
-setInterval(async()=>{await refreshOrders();await refreshBalances()},8000);
+// --- loops ---
+setInterval(function(){var mid=state.prices[state.symbol];if(mid){updateOrderBook(mid);var p=state.pairs.find(function(x){return x.symbol===state.symbol});if(p)updateStats(p)}},2500);
+setInterval(function(){if(state.tab==='tr')loadTrades()},3500);
+setInterval(async function(){await refreshOrders();await refreshBalances()},8000);
 
 init();
-</script>
-
-<script>
-// Inject pair start prices for client-side rendering
-const PAIRS_LIST=${JSON.stringify(PAIRS)};
 </script>
 </body></html>`;
 
@@ -1120,9 +1049,8 @@ body{padding-bottom:40px}
 table{width:100%;border-collapse:collapse;font-size:12px;min-width:520px;font-family:'JetBrains Mono',monospace}
 th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border);white-space:nowrap}
 th{color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase;font-family:Inter,sans-serif}
-td button{background:var(--blue);color:#fff;padding:4px 9px;font-size:11px;margin-right:4px;font-family:Inter,sans-serif}
+td button{background:var(--blue);color:#fff;padding:4px 9px;font-size:11px;margin-right:4px;font-family:Inter,sans-serif;border:none;border-radius:4px;cursor:pointer}
 td button.danger{background:var(--red)}
-td button.ghost{background:transparent;border:1px solid var(--border);color:var(--text2)}
 .empty{padding:20px;text-align:center;color:var(--text3);font-size:12px}
 </style></head><body>
 <div class="top">
@@ -1132,56 +1060,54 @@ td button.ghost{background:transparent;border:1px solid var(--border);color:var(
 </div>
 <div class="wrap" id="wrap"><div class="empty">Loading…</div></div>
 <script>
-const $=s=>document.querySelector(s);
+function $(s){return document.querySelector(s)}
 async function load(){
-  const me=await fetch('/api/auth/me');
+  var me=await fetch('/api/auth/me');
   if(!me.ok){location.href='/login';return}
-  const {user}=await me.json();
-  if(!user.isAdmin){$('#wrap').innerHTML='<div class="empty">Admin access required.</div>';return}
+  var md=await me.json();
+  if(!md.user.isAdmin){$('#wrap').innerHTML='<div class="empty">Admin access required.</div>';return}
 
-  const [u,o,t]=await Promise.all([
-    fetch('/api/admin/users').then(r=>r.json()),
-    fetch('/api/admin/orders').then(r=>r.json()),
-    fetch('/api/admin/trades').then(r=>r.json())
-  ]);
+  var u=await fetch('/api/admin/users').then(function(r){return r.json()});
+  var o=await fetch('/api/admin/orders').then(function(r){return r.json()});
+  var t=await fetch('/api/admin/trades').then(function(r){return r.json()});
 
-  $('#wrap').innerHTML=\`
-    <div class="panel"><h2>Users (\${u.users.length})</h2>
-      <table><thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Admin</th><th>Created</th><th>Actions</th></tr></thead>
-      <tbody>\${u.users.map(x=>\`<tr>
-        <td>\${x.id}</td><td>\${x.username}</td><td>\${x.email}</td>
-        <td>\${x.is_admin?'✅':'—'}</td>
-        <td>\${new Date(x.created_at*1000).toLocaleDateString()}</td>
-        <td>
-          \${!x.is_admin?\`<button onclick="promote(\${x.id})">Promote</button>\`:''}
-          <button class="danger" onclick="credit(\${x.id})">Credit</button>
-        </td>
-      </tr>\`).join('')}</tbody></table>
-    </div>
-    <div class="panel"><h2>Orders (\${o.orders.length})</h2>
-      <table><thead><tr><th>ID</th><th>User</th><th>Symbol</th><th>Side</th><th>Price</th><th>Amount</th><th>Filled</th><th>Status</th></tr></thead>
-      <tbody>\${o.orders.map(r=>\`<tr>
-        <td>\${r.id}</td><td>\${r.username}</td><td>\${r.symbol}</td>
-        <td>\${r.side}</td><td>\${r.price}</td><td>\${r.amount}</td>
-        <td>\${r.filled}</td><td>\${r.status}</td>
-      </tr>\`).join('')}</tbody></table>
-    </div>
-    <div class="panel"><h2>Trades (\${t.trades.length})</h2>
-      <table><thead><tr><th>ID</th><th>Symbol</th><th>Price</th><th>Amount</th><th>Buyer</th><th>Seller</th><th>Time</th></tr></thead>
-      <tbody>\${t.trades.map(r=>\`<tr>
-        <td>\${r.id}</td><td>\${r.symbol}</td><td>\${r.price}</td><td>\${r.amount}</td>
-        <td>\${r.buyer||'—'}</td><td>\${r.seller||'—'}</td>
-        <td>\${new Date(r.created_at*1000).toLocaleString()}</td>
-      </tr>\`).join('')}</tbody></table>
-    </div>\`;
+  $('#wrap').innerHTML=
+    '<div class="panel"><h2>Users ('+u.users.length+')</h2>'+
+      '<table><thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Admin</th><th>Created</th><th>Actions</th></tr></thead><tbody>'+
+      u.users.map(function(x){return '<tr>'+
+        '<td>'+x.id+'</td><td>'+x.username+'</td><td>'+x.email+'</td>'+
+        '<td>'+(x.is_admin?'✅':'—')+'</td>'+
+        '<td>'+new Date(x.created_at*1000).toLocaleDateString()+'</td>'+
+        '<td>'+
+          (!x.is_admin?'<button onclick="promote('+x.id+')">Promote</button>':'')+
+          '<button class="danger" onclick="credit('+x.id+')">Credit</button>'+
+        '</td>'+
+      '</tr>'}).join('')+'</tbody></table>'+
+    '</div>'+
+    '<div class="panel"><h2>Orders ('+o.orders.length+')</h2>'+
+      '<table><thead><tr><th>ID</th><th>User</th><th>Symbol</th><th>Side</th><th>Price</th><th>Amount</th><th>Filled</th><th>Status</th></tr></thead><tbody>'+
+      o.orders.map(function(r){return '<tr>'+
+        '<td>'+r.id+'</td><td>'+r.username+'</td><td>'+r.symbol+'</td>'+
+        '<td>'+r.side+'</td><td>'+r.price+'</td><td>'+r.amount+'</td>'+
+        '<td>'+r.filled+'</td><td>'+r.status+'</td>'+
+      '</tr>'}).join('')+'</tbody></table>'+
+    '</div>'+
+    '<div class="panel"><h2>Trades ('+t.trades.length+')</h2>'+
+      '<table><thead><tr><th>ID</th><th>Symbol</th><th>Price</th><th>Amount</th><th>Buyer</th><th>Seller</th><th>Time</th></tr></thead><tbody>'+
+      t.trades.map(function(r){return '<tr>'+
+        '<td>'+r.id+'</td><td>'+r.symbol+'</td><td>'+r.price+'</td><td>'+r.amount+'</td>'+
+        '<td>'+(r.buyer||'—')+'</td><td>'+(r.seller||'—')+'</td>'+
+        '<td>'+new Date(r.created_at*1000).toLocaleString()+'</td>'+
+      '</tr>'}).join('')+'</tbody></table>'+
+    '</div>';
 }
-window.promote=async id=>{await fetch('/api/admin/users/'+id+'/promote',{method:'POST'});load()};
-window.credit=async id=>{
-  const symbol=prompt('Asset to credit (USDT, BTC, ETH...):','USDT');
+window.promote=async function(id){await fetch('/api/admin/users/'+id+'/promote',{method:'POST'});load()};
+window.credit=async function(id){
+  var symbol=prompt('Asset to credit (USDT, BTC, ETH...):','USDT');
   if(!symbol)return;
-  const amount=prompt('Amount:','10000');
+  var amount=prompt('Amount:','10000');
   if(!amount)return;
-  await fetch('/api/admin/users/'+id+'/credit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,amount:Number(amount)})});
+  await fetch('/api/admin/users/'+id+'/credit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:symbol,amount:Number(amount)})});
   load();
 };
 load();
@@ -1200,7 +1126,6 @@ const clients = new Set();
 
 wss.on('connection', ws => {
   clients.add(ws);
-  // Send current prices
   PAIRS.forEach(p => {
     try { ws.send(JSON.stringify({ symbol: p.symbol, price: livePrices[p.symbol] })); } catch {}
   });
@@ -1273,7 +1198,7 @@ function startSimulatedFeed() {
 // ---------- START ----------
 server.listen(PORT, () => {
   console.log(`✅ TradeHub running on port ${PORT}`);
+  console.log(`   Admin username: ${ADMIN_USERNAME}`);
   console.log(`   Login:  /login`);
-  console.log(`   Admin:  /admin (first registered user is admin)`);
   startBinanceFeed();
 });
