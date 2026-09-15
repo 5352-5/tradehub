@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TradeHub · Login</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0b0e11;color:#eaecef;font-family:Inter,system-ui,sans-serif;font-size:14px;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(circle at 50% 0%,#1a1f2b 0%,#0b0e11 60%)}
+.card{background:#181a20;padding:36px 28px;border-radius:16px;width:100%;max-width:400px;border:1px solid #2b3139;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+.logo{font-size:26px;font-weight:800;color:#f0b90b;text-align:center;letter-spacing:-1px;margin-bottom:4px}
+.tag{color:#848e9c;font-size:12px;text-align:center;margin-bottom:28px}
+.tabs{display:flex;background:#1e2329;border-radius:8px;padding:4px;margin-bottom:20px}
+.tab{flex:1;padding:9px;text-align:center;font-size:13px;font-weight:600;color:#848e9c;border-radius:6px;background:transparent;border:none;cursor:pointer;font-family:inherit}
+.tab.active{background:#2b3139;color:#eaecef}
+form{display:flex;flex-direction:column;gap:12px}
+label{font-size:11px;color:#848e9c;font-weight:500;display:block;margin-bottom:4px}
+input{background:#1e2329;border:1px solid #2b3139;border-radius:6px;padding:12px;color:#eaecef;font-size:14px;outline:none;width:100%;font-family:inherit}
+input:focus{border-color:#f0b90b}
+.primary{background:#f0b90b;color:#0b0e11;font-weight:700;padding:12px;font-size:14px;border-radius:6px;border:none;cursor:pointer;font-family:inherit;margin-top:6px}
+.primary:hover{background:#d4a30a}
+.err{color:#f6465d;font-size:12px;text-align:center;min-height:16px;margin-top:8px}
+.hint{color:#5e6673;font-size:11px;text-align:center;margin-top:20px;line-height:1.6}
+</style></head><body>
+<div class="card">
+  <div class="logo">⚡ TradeHub</div>
+  <div class="tag">Multi-asset paper trading · HFM-style</div>
+  <div class="tabs">
+    <button class="tab active" data-tab="login" type="button">Login</button>
+    <button class="tab" data-tab="register" type="button">Register</button>
+  </div>
+  <form id="loginForm">
+    <div><label>Username or email</label><input name="username" required autocomplete="username"></div>
+    <div><label>Password</label><input name="password" type="password" required autocomplete="current-password"></div>
+    <button type="submit" class="primary">Log In</button>
+  </form>
+  <form id="registerForm" style="display:none">
+    <div><label>Email</label><input name="email" type="email" required autocomplete="email"></div>
+    <div><label>Username</label><input name="username" required pattern="[a-zA-Z0-9_]{3,20}" autocomplete="username"></div>
+    <div><label>Password (8+ chars)</label><input name="password" type="password" required minlength="8" autocomplete="new-password"></div>
+    <button type="submit" class="primary">Create Account</button>
+  </form>
+  <form id="twofaForm" style="display:none">
+    <div><label>2FA code</label><input name="code" inputmode="numeric" maxlength="6" required></div>
+    <button type="submit" class="primary">Verify</button>
+  </form>
+  <div class="err" id="err"></div>
+  <div class="hint">$100,000 starting balance. First user becomes admin.<br>No real money.</div>
+</div>
+<script>
+var tabs=document.querySelectorAll('.tab'),lf=document.getElementById('loginForm'),rf=document.getElementById('registerForm'),tf=document.getElementById('twofaForm'),err=document.getElementById('err');
+var tempToken=null;
+tabs.forEach(function(t){t.onclick=function(){tabs.forEach(function(x){x.classList.remove('active')});t.classList.add('active');var isL=t.dataset.tab==='login';lf.style.display=isL?'flex':'none';rf.style.display=isL?'none':'flex';tf.style.display='none';err.textContent=''}});
+async function post(url,data){var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return [r.ok,await r.json()]}
+lf.onsubmit=async function(e){e.preventDefault();var res=await post('/api/auth/login',Object.fromEntries(new FormData(lf)));if(!res[0]){err.textContent=res[1].error;return}if(res[1].requires2FA){tempToken=res[1].tempToken;lf.style.display='none';tf.style.display='flex';return}location.href='/'};
+tf.onsubmit=async function(e){e.preventDefault();var d=Object.fromEntries(new FormData(tf));d.tempToken=tempToken;var res=await post('/api/auth/verify-2fa',d);if(res[0])location.href='/';else err.textContent=res[1].error};
+rf.onsubmit=async function(e){e.preventDefault();var res=await post('/api/auth/register',Object.fromEntries(new FormData(rf)));if(res[0])location.href='/';else err.textContent=res[1].error};
+fetch('/api/auth/me').then(function(r){if(r.ok)location.href='/'});
+</script></body></html>
