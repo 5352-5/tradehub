@@ -256,7 +256,7 @@ app.get('/api/auth/me', authRequired, (req, res) => {
     db.prepare('UPDATE users SET is_admin=1 WHERE id=?').run(req.user.id);
     req.user.is_admin = 1;
   }
-  res.json({ user: req.user });
+  res.json({ user: { id: req.user.id, email: req.user.email, username: req.user.username, isAdmin: !!req.user.is_admin } });
 });
 
 // ---- MARKET DATA ----
