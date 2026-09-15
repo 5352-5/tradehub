@@ -1,8 +1,3 @@
-// ============================================================
-//  TradeHub — Multi-asset trading terminal
-//  Categories: Crypto, Forex, Commodities, Stocks, Indices
-//  Multi-page SPA with bottom navigation.
-// ============================================================
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const http = require('http');
@@ -14,303 +9,273 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { authenticator } = require('otplib');
 
-// ---------- CONFIG ----------
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(48).toString('hex');
-const JWT_EXPIRES = '30d';
 const DATABASE_URL = process.env.DATABASE_URL;
 const USE_PG = !!DATABASE_URL;
 const IS_PROD = process.env.NODE_ENV === 'production';
 
-if (!process.env.JWT_SECRET) console.log('⚠️  JWT_SECRET not set (session only).');
-console.log(USE_PG ? '📦 Postgres' : '📦 SQLite (data won\'t survive redeploys)');
-
 // ---------- INSTRUMENTS ----------
-const PAIRS = [
-  // Crypto
-  { symbol: 'BTCUSDT',   base: 'BTC',   quote: 'USDT', start: 64000, cat: 'crypto' },
-  { symbol: 'ETHUSDT',   base: 'ETH',   quote: 'USDT', start: 3400,  cat: 'crypto' },
-  { symbol: 'BNBUSDT',   base: 'BNB',   quote: 'USDT', start: 590,   cat: 'crypto' },
-  { symbol: 'SOLUSDT',   base: 'SOL',   quote: 'USDT', start: 148,   cat: 'crypto' },
-  { symbol: 'XRPUSDT',   base: 'XRP',   quote: 'USDT', start: 0.62,  cat: 'crypto' },
-  { symbol: 'ADAUSDT',   base: 'ADA',   quote: 'USDT', start: 0.45,  cat: 'crypto' },
-  { symbol: 'DOGEUSDT',  base: 'DOGE',  quote: 'USDT', start: 0.16,  cat: 'crypto' },
-  { symbol: 'AVAXUSDT',  base: 'AVAX',  quote: 'USDT', start: 36,    cat: 'crypto' },
-  { symbol: 'DOTUSDT',   base: 'DOT',   quote: 'USDT', start: 6.8,   cat: 'crypto' },
-  { symbol: 'LINKUSDT',  base: 'LINK',  quote: 'USDT', start: 18,    cat: 'crypto' },
-  { symbol: 'MATICUSDT', base: 'MATIC', quote: 'USDT', start: 0.88,  cat: 'crypto' },
-  { symbol: 'LTCUSDT',   base: 'LTC',   quote: 'USDT', start: 84,    cat: 'crypto' },
+const CATS = {
+  crypto:      { label: 'Crypto',      lev: 10,  spreadPct: 0.0004 },
+  forex:       { label: 'Forex',       lev: 100, spreadPct: 0.00008 },
+  commodities: { label: 'Commodities', lev: 50,  spreadPct: 0.0005 },
+  stocks:      { label: 'Stocks',      lev: 20,  spreadPct: 0.0006 },
+  indices:     { label: 'Indices',     lev: 50,  spreadPct: 0.0003 }
+};
 
-  // Forex
-  { symbol: 'EURUSD', base: 'EUR', quote: 'USD', start: 1.0842, cat: 'forex' },
-  { symbol: 'GBPUSD', base: 'GBP', quote: 'USD', start: 1.2654, cat: 'forex' },
-  { symbol: 'USDJPY', base: 'USD', quote: 'JPY', start: 149.32, cat: 'forex' },
-  { symbol: 'USDCHF', base: 'USD', quote: 'CHF', start: 0.8842, cat: 'forex' },
-  { symbol: 'AUDUSD', base: 'AUD', quote: 'USD', start: 0.6584, cat: 'forex' },
-  { symbol: 'NZDUSD', base: 'NZD', quote: 'USD', start: 0.6012, cat: 'forex' },
-  { symbol: 'USDCAD', base: 'USD', quote: 'CAD', start: 1.3628, cat: 'forex' },
-  { symbol: 'EURGBP', base: 'EUR', quote: 'GBP', start: 0.8567, cat: 'forex' },
-  { symbol: 'EURJPY', base: 'EUR', quote: 'JPY', start: 161.92, cat: 'forex' },
-  { symbol: 'GBPJPY', base: 'GBP', quote: 'JPY', start: 188.92, cat: 'forex' },
+const INSTRUMENTS = [
+  ['BTCUSDT','BTC','USD',64000,'crypto'],['ETHUSDT','ETH','USD',3400,'crypto'],
+  ['BNBUSDT','BNB','USD',590,'crypto'],['SOLUSDT','SOL','USD',148,'crypto'],
+  ['XRPUSDT','XRP','USD',0.62,'crypto'],['ADAUSDT','ADA','USD',0.45,'crypto'],
+  ['DOGEUSDT','DOGE','USD',0.16,'crypto'],['AVAXUSDT','AVAX','USD',36,'crypto'],
+  ['DOTUSDT','DOT','USD',6.8,'crypto'],['LINKUSDT','LINK','USD',18,'crypto'],
+  ['MATICUSDT','MATIC','USD',0.88,'crypto'],['LTCUSDT','LTC','USD',84,'crypto'],
 
-  // Commodities
-  { symbol: 'XAUUSD', base: 'XAU', quote: 'USD', start: 2358.40, cat: 'commodities' },
-  { symbol: 'XAGUSD', base: 'XAG', quote: 'USD', start: 27.82,   cat: 'commodities' },
-  { symbol: 'WTIUSD', base: 'WTI', quote: 'USD', start: 78.42,   cat: 'commodities' },
-  { symbol: 'BRENTUSD', base: 'BRENT', quote: 'USD', start: 82.14, cat: 'commodities' },
-  { symbol: 'NATGASUSD', base: 'NATGAS', quote: 'USD', start: 2.14, cat: 'commodities' },
-  { symbol: 'COPPERUSD', base: 'COPPER', quote: 'USD', start: 4.42, cat: 'commodities' },
+  ['EURUSD','EUR','USD',1.0842,'forex'],['GBPUSD','GBP','USD',1.2654,'forex'],
+  ['USDJPY','USD','JPY',149.32,'forex'],['USDCHF','USD','CHF',0.8842,'forex'],
+  ['AUDUSD','AUD','USD',0.6584,'forex'],['NZDUSD','NZD','USD',0.6012,'forex'],
+  ['USDCAD','USD','CAD',1.3628,'forex'],['EURGBP','EUR','GBP',0.8567,'forex'],
+  ['EURJPY','EUR','JPY',161.92,'forex'],['GBPJPY','GBP','JPY',188.92,'forex'],
 
-  // Stocks
-  { symbol: 'AAPLUSD', base: 'AAPL', quote: 'USD', start: 224.15, cat: 'stocks' },
-  { symbol: 'TSLAUSD', base: 'TSLA', quote: 'USD', start: 248.50, cat: 'stocks' },
-  { symbol: 'NVDAUSD', base: 'NVDA', quote: 'USD', start: 128.42, cat: 'stocks' },
-  { symbol: 'MSFTUSD', base: 'MSFT', quote: 'USD', start: 442.18, cat: 'stocks' },
-  { symbol: 'GOOGLUSD', base: 'GOOGL', quote: 'USD', start: 168.74, cat: 'stocks' },
-  { symbol: 'AMZNUSD', base: 'AMZN', quote: 'USD', start: 185.32, cat: 'stocks' },
-  { symbol: 'METAUSD', base: 'META', quote: 'USD', start: 512.60, cat: 'stocks' },
-  { symbol: 'NFLXUSD', base: 'NFLX', quote: 'USD', start: 712.40, cat: 'stocks' },
+  ['XAUUSD','XAU','USD',2358.4,'commodities'],['XAGUSD','XAG','USD',27.82,'commodities'],
+  ['WTIUSD','WTI','USD',78.42,'commodities'],['BRENTUSD','BRENT','USD',82.14,'commodities'],
+  ['NATGASUSD','NATGAS','USD',2.14,'commodities'],['COPPERUSD','COPPER','USD',4.42,'commodities'],
 
-  // Indices
-  { symbol: 'SPX500',   base: 'SPX',   quote: 'USD', start: 5620.30, cat: 'indices' },
-  { symbol: 'NAS100',   base: 'NAS',   quote: 'USD', start: 19840.50, cat: 'indices' },
-  { symbol: 'DJ30',     base: 'DJ',    quote: 'USD', start: 41240.80, cat: 'indices' },
-  { symbol: 'FTSE100',  base: 'FTSE',  quote: 'USD', start: 8240.15, cat: 'indices' },
-  { symbol: 'DAX40',    base: 'DAX',   quote: 'USD', start: 18420.40, cat: 'indices' },
-  { symbol: 'NIKKEI225',base: 'N225',  quote: 'USD', start: 38420.60, cat: 'indices' }
-];
+  ['AAPLUSD','AAPL','USD',224.15,'stocks'],['TSLAUSD','TSLA','USD',248.5,'stocks'],
+  ['NVDAUSD','NVDA','USD',128.42,'stocks'],['MSFTUSD','MSFT','USD',442.18,'stocks'],
+  ['GOOGLUSD','GOOGL','USD',168.74,'stocks'],['AMZNUSD','AMZN','USD',185.32,'stocks'],
+  ['METAUSD','META','USD',512.6,'stocks'],['NFLXUSD','NFLX','USD',712.4,'stocks'],
 
-const PAIR_MAP = Object.fromEntries(PAIRS.map(p => [p.symbol, p]));
-const PAIR_START = Object.fromEntries(PAIRS.map(p => [p.symbol, p.start]));
-const CATEGORIES = ['crypto', 'forex', 'commodities', 'stocks', 'indices'];
+  ['SPX500','SPX','USD',5620.3,'indices'],['NAS100','NAS','USD',19840.5,'indices'],
+  ['DJ30','DJ','USD',41240.8,'indices'],['FTSE100','FTSE','USD',8240.15,'indices'],
+  ['DAX40','DAX','USD',18420.4,'indices'],['NIKKEI225','N225','USD',38420.6,'indices']
+].map(([symbol,base,quote,start,cat]) => ({ symbol, base, quote, start, cat }));
 
+const INST_MAP = Object.fromEntries(INSTRUMENTS.map(x => [x.symbol, x]));
 const livePrices = {};
-PAIRS.forEach(p => livePrices[p.symbol] = p.start);
+INSTRUMENTS.forEach(x => livePrices[x.symbol] = x.start);
+
+function getBidAsk(symbol, mid) {
+  const inst = INST_MAP[symbol];
+  if (!inst) return { bid: mid, ask: mid };
+  const half = (mid * CATS[inst.cat].spreadPct) / 2;
+  return { bid: mid - half, ask: mid + half };
+}
 
 // ---------- DB ----------
 let pool, sqlite;
 async function initDB() {
   if (USE_PG) {
     const { Pool } = require('pg');
-    pool = new Pool({
-      connectionString: DATABASE_URL,
-      ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
-    });
+    pool = new Pool({ connectionString: DATABASE_URL, ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false } });
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        is_admin INTEGER DEFAULT 0,
-        totp_secret TEXT,
-        totp_enabled INTEGER DEFAULT 0,
-        created_at INTEGER DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER)
-      );
-      CREATE TABLE IF NOT EXISTS balances (
-        user_id INTEGER NOT NULL,
-        symbol TEXT NOT NULL,
-        free DOUBLE PRECISION DEFAULT 0,
-        locked DOUBLE PRECISION DEFAULT 0,
-        PRIMARY KEY (user_id, symbol)
-      );
-      CREATE TABLE IF NOT EXISTS orders (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL,
-        symbol TEXT NOT NULL,
-        side TEXT NOT NULL,
-        type TEXT NOT NULL DEFAULT 'limit',
-        price DOUBLE PRECISION NOT NULL,
-        amount DOUBLE PRECISION NOT NULL,
-        filled DOUBLE PRECISION DEFAULT 0,
-        status TEXT NOT NULL DEFAULT 'open',
-        created_at INTEGER DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER)
-      );
-      CREATE TABLE IF NOT EXISTS trades (
-        id SERIAL PRIMARY KEY,
-        symbol TEXT NOT NULL,
-        price DOUBLE PRECISION NOT NULL,
-        amount DOUBLE PRECISION NOT NULL,
-        buy_order_id INTEGER,
-        sell_order_id INTEGER,
-        buyer_id INTEGER,
-        seller_id INTEGER,
-        created_at INTEGER DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER)
-      );
+      CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY,email TEXT UNIQUE NOT NULL,username TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,is_admin INTEGER DEFAULT 0,totp_secret TEXT,totp_enabled INTEGER DEFAULT 0,created_at INTEGER DEFAULT (EXTRACT(EPOCH FROM NOW())::INTEGER));
+      CREATE TABLE IF NOT EXISTS accounts (user_id INTEGER PRIMARY KEY,balance DOUBLE PRECISION DEFAULT 100000);
+      CREATE TABLE IF NOT EXISTS positions (id SERIAL PRIMARY KEY,user_id INTEGER NOT NULL,symbol TEXT NOT NULL,side TEXT NOT NULL,size DOUBLE PRECISION NOT NULL,entry_price DOUBLE PRECISION NOT NULL,sl DOUBLE PRECISION,tp DOUBLE PRECISION,status TEXT NOT NULL DEFAULT 'open',opened_at INTEGER,closed_at INTEGER,close_price DOUBLE PRECISION,close_reason TEXT,pnl DOUBLE PRECISION);
+      CREATE TABLE IF NOT EXISTS pending_orders (id SERIAL PRIMARY KEY,user_id INTEGER NOT NULL,symbol TEXT NOT NULL,type TEXT NOT NULL,price DOUBLE PRECISION NOT NULL,size DOUBLE PRECISION NOT NULL,sl DOUBLE PRECISION,tp DOUBLE PRECISION,status TEXT NOT NULL DEFAULT 'pending',created_at INTEGER);
     `);
   } else {
     const Database = require('better-sqlite3');
-    const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
-    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-    sqlite = new Database(path.join(dataDir, 'tradehub.db'));
+    const dir = process.env.DATA_DIR || path.join(__dirname, 'data');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    sqlite = new Database(path.join(dir, 'tradehub.db'));
     sqlite.pragma('journal_mode = WAL');
     sqlite.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT UNIQUE NOT NULL,
-        username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        is_admin INTEGER DEFAULT 0,
-        totp_secret TEXT,
-        totp_enabled INTEGER DEFAULT 0,
-        created_at INTEGER DEFAULT (strftime('%s','now'))
-      );
-      CREATE TABLE IF NOT EXISTS balances (
-        user_id INTEGER NOT NULL, symbol TEXT NOT NULL,
-        free REAL DEFAULT 0, locked REAL DEFAULT 0,
-        PRIMARY KEY (user_id, symbol)
-      );
-      CREATE TABLE IF NOT EXISTS orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL, symbol TEXT NOT NULL,
-        side TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'limit',
-        price REAL NOT NULL, amount REAL NOT NULL,
-        filled REAL DEFAULT 0, status TEXT NOT NULL DEFAULT 'open',
-        created_at INTEGER DEFAULT (strftime('%s','now'))
-      );
-      CREATE TABLE IF NOT EXISTS trades (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        symbol TEXT NOT NULL, price REAL NOT NULL, amount REAL NOT NULL,
-        buy_order_id INTEGER, sell_order_id INTEGER,
-        buyer_id INTEGER, seller_id INTEGER,
-        created_at INTEGER DEFAULT (strftime('%s','now'))
-      );
+      CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT,email TEXT UNIQUE NOT NULL,username TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL,is_admin INTEGER DEFAULT 0,totp_secret TEXT,totp_enabled INTEGER DEFAULT 0,created_at INTEGER DEFAULT (strftime('%s','now')));
+      CREATE TABLE IF NOT EXISTS accounts (user_id INTEGER PRIMARY KEY,balance REAL DEFAULT 100000);
+      CREATE TABLE IF NOT EXISTS positions (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,symbol TEXT NOT NULL,side TEXT NOT NULL,size REAL NOT NULL,entry_price REAL NOT NULL,sl REAL,tp REAL,status TEXT NOT NULL DEFAULT 'open',opened_at INTEGER,closed_at INTEGER,close_price REAL,close_reason TEXT,pnl REAL);
+      CREATE TABLE IF NOT EXISTS pending_orders (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,symbol TEXT NOT NULL,type TEXT NOT NULL,price REAL NOT NULL,size REAL NOT NULL,sl REAL,tp REAL,status TEXT NOT NULL DEFAULT 'pending',created_at INTEGER);
     `);
   }
 }
-function toPgSql(sql) { let i = 0; return sql.replace(/\?/g, () => `$${++i}`); }
-async function query(sql, params = []) {
-  if (USE_PG) return (await pool.query(toPgSql(sql), params)).rows;
-  return sqlite.prepare(sql).all(...params);
-}
-async function getOne(sql, params = []) { return (await query(sql, params))[0]; }
-async function run(sql, params = []) {
-  if (USE_PG) return pool.query(toPgSql(sql), params);
-  return sqlite.prepare(sql).run(...params);
-}
-async function insertReturningId(sql, params = []) {
-  if (USE_PG) return (await pool.query(toPgSql(sql) + ' RETURNING id', params)).rows[0].id;
-  return sqlite.prepare(sql).run(...params).lastInsertRowid;
+function toPg(sql) { let i = 0; return sql.replace(/\?/g, () => `$${++i}`); }
+async function query(sql, p = []) { return USE_PG ? (await pool.query(toPg(sql), p)).rows : sqlite.prepare(sql).all(...p); }
+async function getOne(sql, p = []) { return (await query(sql, p))[0]; }
+async function run(sql, p = []) { return USE_PG ? pool.query(toPg(sql), p) : sqlite.prepare(sql).run(...p); }
+async function insertId(sql, p = []) {
+  if (USE_PG) return (await pool.query(toPg(sql) + ' RETURNING id', p)).rows[0].id;
+  return sqlite.prepare(sql).run(...p).lastInsertRowid;
 }
 
 // ---------- AUTH ----------
 const hashPassword = pw => bcrypt.hashSync(pw, 12);
 const verifyPassword = (pw, h) => bcrypt.compareSync(pw, h);
-const signToken = u => jwt.sign({ uid: u.id, username: u.username, isAdmin: !!u.is_admin }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
-const signTempToken = (uid, purpose) => jwt.sign({ uid, purpose }, JWT_SECRET, { expiresIn: '5m' });
+const signToken = u => jwt.sign({ uid: u.id }, JWT_SECRET, { expiresIn: '30d' });
+const signTemp = uid => jwt.sign({ uid, p: '2fa' }, JWT_SECRET, { expiresIn: '5m' });
 
 async function authRequired(req, res, next) {
   const token = req.cookies?.token || (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    const user = await getOne('SELECT id, email, username, is_admin, totp_enabled FROM users WHERE id=?', [payload.uid]);
+    const p = jwt.verify(token, JWT_SECRET);
+    const user = await getOne('SELECT id,email,username,is_admin,totp_enabled FROM users WHERE id=?', [p.uid]);
     if (!user) return res.status(401).json({ error: 'User not found' });
     req.user = user;
     next();
-  } catch { return res.status(401).json({ error: 'Invalid token' }); }
+  } catch { res.status(401).json({ error: 'Invalid token' }); }
 }
-const adminRequired = (req, res, next) =>
-  req.user?.is_admin ? next() : res.status(403).json({ error: 'Admin access required' });
+const adminRequired = (req, res, next) => req.user?.is_admin ? next() : res.status(403).json({ error: 'Admin only' });
 
-// ---------- BALANCES ----------
-async function ensureBalance(userId, symbol) {
-  const row = await getOne('SELECT free, locked FROM balances WHERE user_id=? AND symbol=?', [userId, symbol]);
-  if (row) return row;
-  await run('INSERT INTO balances (user_id, symbol, free, locked) VALUES (?,?,0,0)', [userId, symbol]);
-  return { free: 0, locked: 0 };
-}
-async function adjustBalance(userId, symbol, freeDelta, lockedDelta) {
-  await ensureBalance(userId, symbol);
-  await run('UPDATE balances SET free = free + ?, locked = locked + ? WHERE user_id=? AND symbol=?',
-    [freeDelta, lockedDelta, userId, symbol]);
-}
-async function getBalances(userId) {
-  return await query('SELECT symbol, free, locked FROM balances WHERE user_id=? AND (free > 0 OR locked > 0) ORDER BY symbol', [userId]);
-}
-async function giveStarterBalances(userId) {
-  const starter = [
-    ['USDT', 100000], ['USD', 100000], ['EUR', 50000], ['GBP', 50000], ['JPY', 5000000],
-    ['BTC', 1], ['ETH', 5], ['SOL', 50]
-  ];
-  for (const [sym, amt] of starter) {
-    if (USE_PG) {
-      await run('INSERT INTO balances (user_id, symbol, free, locked) VALUES (?,?,?,0) ON CONFLICT (user_id, symbol) DO UPDATE SET free=EXCLUDED.free', [userId, sym, amt]);
-    } else {
-      await run('INSERT OR REPLACE INTO balances (user_id, symbol, free, locked) VALUES (?,?,?,0)', [userId, sym, amt]);
-    }
+// ---------- TRADING ----------
+async function usedMargin(userId) {
+  const positions = await query('SELECT * FROM positions WHERE user_id=? AND status=?', [userId, 'open']);
+  let m = 0;
+  for (const p of positions) {
+    const inst = INST_MAP[p.symbol];
+    if (!inst) continue;
+    m += (p.entry_price * p.size) / CATS[inst.cat].lev;
   }
+  return m;
+}
+async function unrealizedPnl(userId) {
+  const positions = await query('SELECT * FROM positions WHERE user_id=? AND status=?', [userId, 'open']);
+  let total = 0;
+  for (const p of positions) {
+    const mid = livePrices[p.symbol];
+    if (!mid) continue;
+    const { bid, ask } = getBidAsk(p.symbol, mid);
+    const closePrice = p.side === 'long' ? bid : ask;
+    total += (closePrice - p.entry_price) * p.size * (p.side === 'long' ? 1 : -1);
+  }
+  return total;
+}
+async function accountStats(userId) {
+  const acct = await getOne('SELECT balance FROM accounts WHERE user_id=?', [userId]);
+  const balance = acct?.balance ?? 0;
+  const unreal = await unrealizedPnl(userId);
+  const used = await usedMargin(userId);
+  const equity = balance + unreal;
+  const freeMargin = equity - used;
+  const marginLevel = used > 0 ? (equity / used) * 100 : null;
+  return { balance, equity, unrealized: unreal, usedMargin: used, freeMargin, marginLevel };
+}
+async function openMarket(userId, symbol, side, size, sl, tp) {
+  const inst = INST_MAP[symbol];
+  if (!inst) throw new Error('Unknown symbol');
+  if (!['long', 'short'].includes(side)) throw new Error('Invalid side');
+  if (!(size > 0)) throw new Error('Invalid size');
+  const mid = livePrices[symbol];
+  if (!mid) throw new Error('No price');
+  const { bid, ask } = getBidAsk(symbol, mid);
+  const entry = side === 'long' ? ask : bid;
+  const margin = (entry * size) / CATS[inst.cat].lev;
+  const stats = await accountStats(userId);
+  if (margin > stats.freeMargin) throw new Error('Insufficient margin');
+  if (sl && side === 'long' && sl >= entry) throw new Error('SL must be below entry');
+  if (sl && side === 'short' && sl <= entry) throw new Error('SL must be above entry');
+  if (tp && side === 'long' && tp <= entry) throw new Error('TP must be above entry');
+  if (tp && side === 'short' && tp >= entry) throw new Error('TP must be below entry');
+  const id = await insertId(`INSERT INTO positions (user_id,symbol,side,size,entry_price,sl,tp,status,opened_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+    [userId, symbol, side, size, entry, sl || null, tp || null, 'open', Math.floor(Date.now() / 1000)]);
+  return { id, entry, bid, ask };
+}
+async function closePosition(pos, price, reason) {
+  const pnl = (price - pos.entry_price) * pos.size * (pos.side === 'long' ? 1 : -1);
+  await run('UPDATE positions SET status=?,closed_at=?,close_price=?,close_reason=?,pnl=? WHERE id=?',
+    ['closed', Math.floor(Date.now() / 1000), price, reason, pnl, pos.id]);
+  await run('UPDATE accounts SET balance = balance + ? WHERE user_id=?', [pnl, pos.user_id]);
+  return pnl;
 }
 
-// ---------- MATCHING ENGINE ----------
-async function matchOrders(symbol) {
-  const pair = PAIR_MAP[symbol];
-  if (!pair) return;
-  const buys = await query(`SELECT * FROM orders WHERE symbol=? AND side='buy' AND status IN ('open','partial') ORDER BY price DESC, created_at ASC`, [symbol]);
-  const sells = await query(`SELECT * FROM orders WHERE symbol=? AND side='sell' AND status IN ('open','partial') ORDER BY price ASC, created_at ASC`, [symbol]);
-  for (const buy of buys) {
-    if (buy.status === 'filled') continue;
-    for (const sell of sells) {
-      if (sell.status === 'filled') continue;
-      if (buy.price < sell.price) break;
-      const fill = Math.min(buy.amount - buy.filled, sell.amount - sell.filled);
-      if (fill <= 1e-12) continue;
-      const execPrice = sell.created_at <= buy.created_at ? sell.price : buy.price;
-      const newBuyFilled = buy.filled + fill, newSellFilled = sell.filled + fill;
-      const buyStatus = newBuyFilled >= buy.amount - 1e-9 ? 'filled' : 'partial';
-      const sellStatus = newSellFilled >= sell.amount - 1e-9 ? 'filled' : 'partial';
-      await run('UPDATE orders SET filled=?, status=? WHERE id=?', [newBuyFilled, buyStatus, buy.id]);
-      await run('UPDATE orders SET filled=?, status=? WHERE id=?', [newSellFilled, sellStatus, sell.id]);
-      await adjustBalance(buy.user_id,  pair.quote, (buy.price - execPrice) * fill, -buy.price * fill);
-      await adjustBalance(buy.user_id,  pair.base,  fill, 0);
-      await adjustBalance(sell.user_id, pair.base,  0, -fill);
-      await adjustBalance(sell.user_id, pair.quote, execPrice * fill, 0);
-      await run(`INSERT INTO trades (symbol, price, amount, buy_order_id, sell_order_id, buyer_id, seller_id) VALUES (?,?,?,?,?,?,?)`,
-        [symbol, execPrice, fill, buy.id, sell.id, buy.user_id, sell.user_id]);
-      buy.filled = newBuyFilled; sell.filled = newSellFilled;
-      if (buyStatus === 'filled') break;
+// ---------- TICK PROCESSOR ----------
+async function processTicks() {
+  try {
+    const pendings = await query("SELECT * FROM pending_orders WHERE status='pending'");
+    for (const p of pendings) {
+      const mid = livePrices[p.symbol];
+      if (!mid) continue;
+      const { bid, ask } = getBidAsk(p.symbol, mid);
+      let trigger = false;
+      if (p.type === 'buy_limit' && ask <= p.price) trigger = true;
+      if (p.type === 'sell_limit' && bid >= p.price) trigger = true;
+      if (p.type === 'buy_stop' && ask >= p.price) trigger = true;
+      if (p.type === 'sell_stop' && bid <= p.price) trigger = true;
+      if (!trigger) continue;
+      const side = p.type.startsWith('buy') ? 'long' : 'short';
+      const entry = side === 'long' ? ask : bid;
+      const inst = INST_MAP[p.symbol];
+      const margin = (entry * p.size) / CATS[inst.cat].lev;
+      const stats = await accountStats(p.user_id);
+      if (margin > stats.freeMargin) {
+        await run("UPDATE pending_orders SET status='rejected' WHERE id=?", [p.id]);
+        continue;
+      }
+      await run(`INSERT INTO positions (user_id,symbol,side,size,entry_price,sl,tp,status,opened_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+        [p.user_id, p.symbol, side, p.size, entry, p.sl, p.tp, 'open', Math.floor(Date.now() / 1000)]);
+      await run("UPDATE pending_orders SET status='executed' WHERE id=?", [p.id]);
     }
-  }
+    const positions = await query("SELECT * FROM positions WHERE status='open'");
+    for (const pos of positions) {
+      const mid = livePrices[pos.symbol];
+      if (!mid) continue;
+      const { bid, ask } = getBidAsk(pos.symbol, mid);
+      let closeAt = null, reason = null;
+      if (pos.side === 'long') {
+        if (pos.sl && bid <= pos.sl) { closeAt = pos.sl; reason = 'sl'; }
+        else if (pos.tp && bid >= pos.tp) { closeAt = pos.tp; reason = 'tp'; }
+      } else {
+        if (pos.sl && ask >= pos.sl) { closeAt = pos.sl; reason = 'sl'; }
+        else if (pos.tp && ask <= pos.tp) { closeAt = pos.tp; reason = 'tp'; }
+      }
+      if (closeAt !== null) await closePosition(pos, closeAt, reason);
+    }
+  } catch (e) { console.error('Tick error:', e.message); }
 }
 
-// ---------- P&L ----------
-async function computePnL(userId) {
-  const trades = await query(`SELECT * FROM trades WHERE buyer_id=? OR seller_id=? ORDER BY created_at ASC, id ASC`, [userId, userId]);
-  const holdings = {};
-  let realizedPnl = 0;
-  for (const t of trades) {
-    const pair = PAIR_MAP[t.symbol];
-    if (!pair) continue;
-    const base = pair.base;
-    if (t.buyer_id === userId) {
-      if (!holdings[base]) holdings[base] = { qty: 0, costBasis: 0 };
-      holdings[base].qty += t.amount;
-      holdings[base].costBasis += t.price * t.amount;
-    } else {
-      const h = holdings[base] || { qty: 0, costBasis: 0 };
-      const avgCost = h.qty > 0 ? h.costBasis / h.qty : 0;
-      const soldCost = avgCost * t.amount;
-      realizedPnl += t.price * t.amount - soldCost;
-      h.qty -= t.amount;
-      h.costBasis -= soldCost;
-      holdings[base] = h;
-    }
+// ---------- CANDLES ----------
+function intervalMs(i) {
+  const m = { '1m': 60000, '5m': 300000, '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000 };
+  return m[i] || 14400000;
+}
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    var t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function hashSeed(s) { let h = 0; for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0; return Math.abs(h); }
+
+function syntheticCandles(inst, interval, limit) {
+  const rand = mulberry32(hashSeed(inst.symbol + interval));
+  const out = [];
+  let price = inst.start;
+  const vol = price * 0.008;
+  const ms = intervalMs(interval);
+  const now = Date.now();
+  for (let i = limit - 1; i >= 0; i--) {
+    const o = price + (rand() - 0.5) * vol;
+    const c = o + (rand() - 0.5) * vol * 1.2;
+    const h = Math.max(o, c) + rand() * vol * 0.6;
+    const l = Math.min(o, c) - rand() * vol * 0.6;
+    out.push({ t: now - i * ms, o, h, l, c, v: rand() * 100 + 20 });
+    price = c;
   }
-  let unrealizedPnl = 0;
-  const positions = [];
-  for (const [base, h] of Object.entries(holdings)) {
-    if (h.qty <= 1e-9) continue;
-    const pair = PAIRS.find(p => p.base === base);
-    if (!pair) continue;
-    const current = livePrices[pair.symbol] || pair.start;
-    const avgCost = h.costBasis / h.qty;
-    const value = current * h.qty;
-    const cost = avgCost * h.qty;
-    const pnl = value - cost;
-    unrealizedPnl += pnl;
-    positions.push({ base, qty: h.qty, avgCost, currentPrice: current, value, pnl, pnlPct: cost > 0 ? (pnl / cost) * 100 : 0 });
+  if (out.length) {
+    const last = out[out.length - 1];
+    last.c = livePrices[inst.symbol] || inst.start;
+    last.h = Math.max(last.h, last.c);
+    last.l = Math.min(last.l, last.c);
   }
-  return { realized: realizedPnl, unrealized: unrealizedPnl, positions };
+  return out;
+}
+async function fetchKlines(symbol, interval, limit) {
+  const inst = INST_MAP[symbol];
+  if (!inst) return [];
+  if (inst.cat === 'crypto') {
+    try {
+      const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('bad');
+      const data = await r.json();
+      if (Array.isArray(data) && data.length) {
+        return data.map(k => ({ t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5] }));
+      }
+    } catch {}
+  }
+  return syntheticCandles(inst, interval, limit);
 }
 
 // ---------- EXPRESS ----------
@@ -318,53 +283,52 @@ const app = express();
 const server = http.createServer(app);
 app.use(express.json());
 app.use(cookieParser());
+app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+
+// --- AUTH ---
 app.post('/api/auth/register', async (req, res) => {
   const { email, username, password } = req.body || {};
   if (!email || !username || !password) return res.status(400).json({ error: 'Missing fields' });
-  if (password.length < 8) return res.status(400).json({ error: 'Password must be 8+ chars' });
-  if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'Username: 3-20 chars, letters/numbers/underscore' });
-  const countRow = await getOne('SELECT COUNT(*) AS c FROM users');
-  const isFirstUser = Number(countRow.c) === 0 ? 1 : 0;
+  if (password.length < 8) return res.status(400).json({ error: 'Password 8+ chars' });
+  if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'Username 3-20 chars, letters/numbers/underscore' });
+  const c = await getOne('SELECT COUNT(*) AS c FROM users');
+  const isFirst = Number(c.c) === 0 ? 1 : 0;
   try {
-    const userId = await insertReturningId('INSERT INTO users (email, username, password_hash, is_admin) VALUES (?,?,?,?)',
-      [email.toLowerCase(), username, hashPassword(password), isFirstUser]);
-    await giveStarterBalances(userId);
-    const user = await getOne('SELECT * FROM users WHERE id=?', [userId]);
-    const token = signToken(user);
-    res.cookie('token', token, { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge: 30 * 24 * 3600 * 1000 });
-    res.json({ ok: true, user: { id: user.id, username: user.username, isAdmin: !!user.is_admin } });
+    const uid = await insertId('INSERT INTO users (email,username,password_hash,is_admin) VALUES (?,?,?,?)',
+      [email.toLowerCase(), username, hashPassword(password), isFirst]);
+    await run('INSERT INTO accounts (user_id,balance) VALUES (?,?)', [uid, 100000]);
+    const u = await getOne('SELECT * FROM users WHERE id=?', [uid]);
+    res.cookie('token', signToken(u), { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge: 30 * 24 * 3600 * 1000 });
+    res.json({ ok: true, user: { id: u.id, username: u.username, isAdmin: !!u.is_admin } });
   } catch (e) {
-    if (String(e).includes('UNIQUE') || String(e).includes('duplicate')) return res.status(409).json({ error: 'Email or username taken' });
-    console.error(e);
-    res.status(500).json({ error: 'Server error' });
+    if (String(e).includes('UNIQUE') || String(e).includes('duplicate')) return res.status(409).json({ error: 'Username or email taken' });
+    console.error(e); res.status(500).json({ error: 'Server error' });
   }
 });
 
 app.post('/api/auth/login', async (req, res) => {
   const { username, password } = req.body || {};
-  const user = await getOne('SELECT * FROM users WHERE username=? OR email=?', [username, (username || '').toLowerCase()]);
-  if (!user || !verifyPassword(password, user.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
-  if (user.totp_enabled && user.totp_secret) {
-    return res.json({ ok: true, requires2FA: true, tempToken: signTempToken(user.id, '2fa') });
-  }
-  const token = signToken(user);
-  res.cookie('token', token, { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge: 30 * 24 * 3600 * 1000 });
-  res.json({ ok: true, user: { id: user.id, username: user.username, isAdmin: !!user.is_admin } });
+  const u = await getOne('SELECT * FROM users WHERE username=? OR email=?', [username, (username || '').toLowerCase()]);
+  if (!u || !verifyPassword(password, u.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
+  if (u.totp_enabled && u.totp_secret) return res.json({ ok: true, requires2FA: true, tempToken: signTemp(u.id) });
+  res.cookie('token', signToken(u), { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge: 30 * 24 * 3600 * 1000 });
+  res.json({ ok: true, user: { id: u.id, username: u.username, isAdmin: !!u.is_admin } });
 });
 
 app.post('/api/auth/verify-2fa', async (req, res) => {
   const { tempToken, code } = req.body || {};
-  if (!tempToken || !code) return res.status(400).json({ error: 'Missing fields' });
-  let payload;
-  try { payload = jwt.verify(tempToken, JWT_SECRET); } catch { return res.status(401).json({ error: 'Invalid temp token' }); }
-  if (payload.purpose !== '2fa') return res.status(401).json({ error: 'Invalid purpose' });
-  const user = await getOne('SELECT * FROM users WHERE id=?', [payload.uid]);
-  if (!user || !user.totp_secret) return res.status(401).json({ error: 'User not found' });
-  if (!authenticator.verify({ token: String(code), secret: user.totp_secret })) return res.status(401).json({ error: 'Invalid 2FA code' });
-  const token = signToken(user);
-  res.cookie('token', token, { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge: 30 * 24 * 3600 * 1000 });
-  res.json({ ok: true, user: { id: user.id, username: user.username, isAdmin: !!user.is_admin } });
+  if (!tempToken || !code) return res.status(400).json({ error: 'Missing' });
+  let p; try { p = jwt.verify(tempToken, JWT_SECRET); } catch { return res.status(401).json({ error: 'Expired' }); }
+  if (p.p !== '2fa') return res.status(401).json({ error: 'Bad token' });
+  const u = await getOne('SELECT * FROM users WHERE id=?', [p.uid]);
+  if (!u?.totp_secret) return res.status(401).json({ error: 'User' });
+  if (!authenticator.verify({ token: String(code), secret: u.totp_secret })) return res.status(401).json({ error: 'Bad code' });
+  res.cookie('token', signToken(u), { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge: 30 * 24 * 3600 * 1000 });
+  res.json({ ok: true, user: { id: u.id, username: u.username, isAdmin: !!u.is_admin } });
 });
 
 app.post('/api/auth/logout', (req, res) => { res.clearCookie('token'); res.json({ ok: true }); });
@@ -375,1082 +339,147 @@ app.get('/api/auth/me', authRequired, (req, res) => {
 
 app.post('/api/auth/2fa/setup', authRequired, adminRequired, async (req, res) => {
   const secret = authenticator.generateSecret();
-  await run('UPDATE users SET totp_secret=?, totp_enabled=0 WHERE id=?', [secret, req.user.id]);
+  await run('UPDATE users SET totp_secret=?,totp_enabled=0 WHERE id=?', [secret, req.user.id]);
   res.json({ ok: true, secret, otpauth: authenticator.keyuri(req.user.username, 'TradeHub', secret) });
 });
 app.post('/api/auth/2fa/enable', authRequired, adminRequired, async (req, res) => {
   const { code } = req.body || {};
-  const user = await getOne('SELECT totp_secret FROM users WHERE id=?', [req.user.id]);
-  if (!user?.totp_secret) return res.status(400).json({ error: 'Run setup first' });
-  if (!authenticator.verify({ token: String(code), secret: user.totp_secret })) return res.status(400).json({ error: 'Invalid code' });
+  const u = await getOne('SELECT totp_secret FROM users WHERE id=?', [req.user.id]);
+  if (!u?.totp_secret) return res.status(400).json({ error: 'Run setup first' });
+  if (!authenticator.verify({ token: String(code), secret: u.totp_secret })) return res.status(400).json({ error: 'Bad code' });
   await run('UPDATE users SET totp_enabled=1 WHERE id=?', [req.user.id]);
   res.json({ ok: true });
 });
 app.post('/api/auth/2fa/disable', authRequired, adminRequired, async (req, res) => {
-  await run('UPDATE users SET totp_enabled=0, totp_secret=NULL WHERE id=?', [req.user.id]);
+  await run('UPDATE users SET totp_enabled=0,totp_secret=NULL WHERE id=?', [req.user.id]);
   res.json({ ok: true });
 });
 
-app.get('/api/pairs', (req, res) => {
-  const out = PAIRS.map(p => ({ symbol: p.symbol, base: p.base, quote: p.quote, cat: p.cat, price: livePrices[p.symbol] || p.start }));
-  res.json({ pairs: out });
+// --- MARKET DATA ---
+app.get('/api/instruments', (req, res) => {
+  const out = INSTRUMENTS.map(x => {
+    const mid = livePrices[x.symbol] || x.start;
+    const { bid, ask } = getBidAsk(x.symbol, mid);
+    return { symbol: x.symbol, base: x.base, quote: x.quote, cat: x.cat, bid, ask, mid, leverage: CATS[x.cat].lev };
+  });
+  res.json({ instruments: out });
 });
 
-app.get('/api/trades/:symbol', async (req, res) => {
-  const sym = req.params.symbol.toUpperCase();
-  const rows = await query('SELECT price, amount, created_at, buyer_id, seller_id FROM trades WHERE symbol=? ORDER BY id DESC LIMIT 30', [sym]);
-  res.json({ trades: rows });
+app.get('/api/klines/:symbol', async (req, res) => {
+  const sym = (req.params.symbol || '').toUpperCase();
+  const interval = String(req.query.interval || '4h');
+  const limit = Math.min(Number(req.query.limit) || 100, 500);
+  const candles = await fetchKlines(sym, interval, limit);
+  res.json({ candles });
 });
 
-app.get('/api/balances', authRequired, async (req, res) => res.json({ balances: await getBalances(req.user.id) }));
-app.get('/api/pnl', authRequired, async (req, res) => res.json(await computePnL(req.user.id)));
-
-app.get('/api/orders', authRequired, async (req, res) => {
-  const rows = await query(`SELECT * FROM orders WHERE user_id=? AND status IN ('open','partial') ORDER BY id DESC`, [req.user.id]);
-  res.json({ orders: rows });
-});
-app.get('/api/orders/history', authRequired, async (req, res) => {
-  const rows = await query(`SELECT * FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 100`, [req.user.id]);
-  res.json({ orders: rows });
+// --- ACCOUNT ---
+app.get('/api/account', authRequired, async (req, res) => {
+  res.json(await accountStats(req.user.id));
 });
 
-app.post('/api/orders', authRequired, async (req, res) => {
-  const { symbol, side, price, amount, type } = req.body || {};
+// --- POSITIONS ---
+app.get('/api/positions', authRequired, async (req, res) => {
+  const rows = await query("SELECT * FROM positions WHERE user_id=? AND status='open' ORDER BY id DESC", [req.user.id]);
+  const out = rows.map(p => {
+    const mid = livePrices[p.symbol];
+    const { bid, ask } = getBidAsk(p.symbol, mid);
+    const closePrice = p.side === 'long' ? bid : ask;
+    const pnl = (closePrice - p.entry_price) * p.size * (p.side === 'long' ? 1 : -1);
+    const pnlPct = p.entry_price * p.size > 0 ? (pnl / (p.entry_price * p.size)) * 100 : 0;
+    return {
+      id: p.id, symbol: p.symbol, side: p.side, size: p.size,
+      entry: p.entry_price, sl: p.sl, tp: p.tp,
+      bid, ask, closePrice, pnl, pnlPct,
+      openedAt: p.opened_at, leverage: CATS[INST_MAP[p.symbol].cat].lev
+    };
+  });
+  res.json({ positions: out });
+});
+
+app.post('/api/positions', authRequired, async (req, res) => {
+  const { symbol, side, size, sl, tp } = req.body || {};
+  try {
+    const r = await openMarket(req.user.id, (symbol || '').toUpperCase(), side, Number(size), sl ? Number(sl) : null, tp ? Number(tp) : null);
+    res.json({ ok: true, ...r });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post('/api/positions/:id/close', authRequired, async (req, res) => {
+  const pos = await getOne('SELECT * FROM positions WHERE id=? AND user_id=? AND status=?', [req.params.id, req.user.id, 'open']);
+  if (!pos) return res.status(404).json({ error: 'Position not found' });
+  const mid = livePrices[pos.symbol];
+  const { bid, ask } = getBidAsk(pos.symbol, mid);
+  const closePrice = pos.side === 'long' ? bid : ask;
+  const pnl = await closePosition(pos, closePrice, 'manual');
+  res.json({ ok: true, pnl, closePrice });
+});
+
+// --- PENDING ORDERS ---
+app.get('/api/pending', authRequired, async (req, res) => {
+  const rows = await query("SELECT * FROM pending_orders WHERE user_id=? AND status='pending' ORDER BY id DESC", [req.user.id]);
+  res.json({ pending: rows });
+});
+
+app.post('/api/pending', authRequired, async (req, res) => {
+  const { symbol, type, price, size, sl, tp } = req.body || {};
   const sym = (symbol || '').toUpperCase();
-  const pair = PAIR_MAP[sym];
-  if (!pair) return res.status(400).json({ error: 'Unknown symbol' });
-  if (!['buy', 'sell'].includes(side)) return res.status(400).json({ error: 'Invalid side' });
-  const orderType = type === 'market' ? 'market' : 'limit';
-  let p = Number(price);
-  const a = Number(amount);
-  if (!(a > 0)) return res.status(400).json({ error: 'Amount must be positive' });
-
-  if (orderType === 'market') {
-    p = livePrices[sym];
-    if (!(p > 0)) return res.status(400).json({ error: 'No market price' });
-  } else if (!(p > 0)) return res.status(400).json({ error: 'Price must be positive' });
-
-  if (orderType === 'market') {
-    const cost = p * a;
-    if (side === 'buy') {
-      const bal = await ensureBalance(req.user.id, pair.quote);
-      if (bal.free < cost) return res.status(400).json({ error: `Insufficient ${pair.quote}` });
-      await adjustBalance(req.user.id, pair.quote, -cost, 0);
-      await adjustBalance(req.user.id, pair.base, a, 0);
-    } else {
-      const bal = await ensureBalance(req.user.id, pair.base);
-      if (bal.free < a) return res.status(400).json({ error: `Insufficient ${pair.base}` });
-      await adjustBalance(req.user.id, pair.base, -a, 0);
-      await adjustBalance(req.user.id, pair.quote, cost, 0);
-    }
-    const orderId = await insertReturningId(
-      `INSERT INTO orders (user_id, symbol, side, type, price, amount, filled, status) VALUES (?,?,?,?,?,?,?, 'filled')`,
-      [req.user.id, sym, side, 'market', p, a, a]);
-    await run(`INSERT INTO trades (symbol, price, amount, buy_order_id, sell_order_id, buyer_id, seller_id) VALUES (?,?,?,?,?,?,?)`,
-      [sym, p, a, side === 'buy' ? orderId : null, side === 'sell' ? orderId : null, side === 'buy' ? req.user.id : null, side === 'sell' ? req.user.id : null]);
-    return res.json({ ok: true, orderId, filled: a, avgPrice: p });
-  }
-
-  const cost = p * a;
-  const bal = await ensureBalance(req.user.id, side === 'buy' ? pair.quote : pair.base);
-  const needed = side === 'buy' ? cost : a;
-  if (bal.free < needed) return res.status(400).json({ error: `Insufficient ${side === 'buy' ? pair.quote : pair.base}. Free: ${bal.free.toFixed(6)}` });
-  if (side === 'buy') await adjustBalance(req.user.id, pair.quote, -cost, cost);
-  else                await adjustBalance(req.user.id, pair.base, -a, a);
-  const orderId = await insertReturningId(`INSERT INTO orders (user_id, symbol, side, type, price, amount, status) VALUES (?,?,?,?,?,?, 'open')`,
-    [req.user.id, sym, side, 'limit', p, a]);
-  await matchOrders(sym);
-  res.json({ ok: true, orderId });
+  if (!INST_MAP[sym]) return res.status(400).json({ error: 'Unknown symbol' });
+  if (!['buy_limit', 'sell_limit', 'buy_stop', 'sell_stop'].includes(type)) return res.status(400).json({ error: 'Invalid type' });
+  const p = Number(price), s = Number(size);
+  if (!(p > 0) || !(s > 0)) return res.status(400).json({ error: 'Invalid price or size' });
+  const id = await insertId(
+    `INSERT INTO pending_orders (user_id,symbol,type,price,size,sl,tp,status,created_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+    [req.user.id, sym, type, p, s, sl ? Number(sl) : null, tp ? Number(tp) : null, 'pending', Math.floor(Date.now() / 1000)]);
+  res.json({ ok: true, id });
 });
 
-app.delete('/api/orders/:id', authRequired, async (req, res) => {
-  const order = await getOne('SELECT * FROM orders WHERE id=? AND user_id=?', [req.params.id, req.user.id]);
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-  if (!['open', 'partial'].includes(order.status)) return res.status(400).json({ error: 'Cannot cancel' });
-  const pair = PAIR_MAP[order.symbol];
-  const remaining = order.amount - order.filled;
-  if (order.side === 'buy') await adjustBalance(req.user.id, pair.quote, order.price * remaining, -order.price * remaining);
-  else                       await adjustBalance(req.user.id, pair.base, remaining, -remaining);
-  await run("UPDATE orders SET status='cancelled' WHERE id=?", [order.id]);
+app.delete('/api/pending/:id', authRequired, async (req, res) => {
+  const o = await getOne("SELECT * FROM pending_orders WHERE id=? AND user_id=? AND status='pending'", [req.params.id, req.user.id]);
+  if (!o) return res.status(404).json({ error: 'Not found' });
+  await run("UPDATE pending_orders SET status='cancelled' WHERE id=?", [o.id]);
   res.json({ ok: true });
 });
 
+// --- HISTORY ---
+app.get('/api/history', authRequired, async (req, res) => {
+  const rows = await query("SELECT * FROM positions WHERE user_id=? AND status='closed' ORDER BY closed_at DESC LIMIT 100", [req.user.id]);
+  res.json({ history: rows });
+});
+
+// --- ADMIN ---
 app.get('/api/admin/users', authRequired, adminRequired, async (req, res) => {
-  const users = await query('SELECT id, email, username, is_admin, totp_enabled, created_at FROM users ORDER BY id ASC');
-  res.json({ users });
+  const users = await query('SELECT id,email,username,is_admin,totp_enabled,created_at FROM users ORDER BY id ASC');
+  const accounts = await query('SELECT user_id,balance FROM accounts');
+  const acctMap = Object.fromEntries(accounts.map(a => [a.user_id, a.balance]));
+  res.json({ users: users.map(u => ({ ...u, balance: acctMap[u.id] || 0 })) });
 });
 app.post('/api/admin/users/:id/promote', authRequired, adminRequired, async (req, res) => {
-  await run('UPDATE users SET is_admin=1 WHERE id=?', [req.params.id]);
-  res.json({ ok: true });
+  await run('UPDATE users SET is_admin=1 WHERE id=?', [req.params.id]); res.json({ ok: true });
 });
 app.post('/api/admin/users/:id/demote', authRequired, adminRequired, async (req, res) => {
-  if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: 'Cannot demote yourself' });
-  await run('UPDATE users SET is_admin=0 WHERE id=?', [req.params.id]);
-  res.json({ ok: true });
+  if (Number(req.params.id) === req.user.id) return res.status(400).json({ error: "Can't demote yourself" });
+  await run('UPDATE users SET is_admin=0 WHERE id=?', [req.params.id]); res.json({ ok: true });
 });
 app.post('/api/admin/users/:id/credit', authRequired, adminRequired, async (req, res) => {
-  const symbol = String(req.body?.symbol || 'USDT').toUpperCase();
-  const amount = Number(req.body?.amount) || 0;
-  if (!amount) return res.status(400).json({ error: 'Amount required' });
-  await ensureBalance(Number(req.params.id), symbol);
-  await run('UPDATE balances SET free = free + ? WHERE user_id=? AND symbol=?', [amount, req.params.id, symbol]);
+  const amt = Number(req.body?.amount) || 0;
+  if (!amt) return res.status(400).json({ error: 'Amount required' });
+  await run('UPDATE accounts SET balance = balance + ? WHERE user_id=?', [amt, req.params.id]);
   res.json({ ok: true });
 });
-app.get('/api/admin/orders', authRequired, adminRequired, async (req, res) => {
-  const rows = await query(`SELECT o.*, u.username FROM orders o JOIN users u ON u.id = o.user_id ORDER BY o.id DESC LIMIT 200`);
-  res.json({ orders: rows });
+app.get('/api/admin/positions', authRequired, adminRequired, async (req, res) => {
+  const rows = await query(`SELECT p.*, u.username FROM positions p JOIN users u ON u.id = p.user_id ORDER BY p.id DESC LIMIT 200`);
+  res.json({ positions: rows });
 });
-app.get('/api/admin/trades', authRequired, adminRequired, async (req, res) => {
-  const rows = await query(`SELECT t.*, b.username AS buyer, s.username AS seller FROM trades t LEFT JOIN users b ON b.id = t.buyer_id LEFT JOIN users s ON s.id = t.seller_id ORDER BY t.id DESC LIMIT 200`);
-  res.json({ trades: rows });
-});
-
-// ---------- SHARED CSS ----------
-const BASE_CSS = `
-*{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --bg:#0b0e11;--panel:#181a20;--panel2:#1e2329;--hover:#2b3139;--border:#2b3139;
-  --text:#eaecef;--text2:#848e9c;--text3:#5e6673;
-  --yellow:#f0b90b;--yellow2:#d4a30a;
-  --green:#0ecb81;--red:#f6465d;--blue:#1e6cf5;
-}
-body{background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,sans-serif;font-size:13px;-webkit-font-smoothing:antialiased}
-a{color:var(--yellow);text-decoration:none}
-button{font-family:inherit;cursor:pointer;border:none;border-radius:4px;transition:background .15s}
-input,select{font-family:inherit;background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:8px 10px;color:var(--text);font-size:13px;outline:none;width:100%}
-input:focus,select:focus{border-color:var(--yellow)}
-.up{color:var(--green)}.down{color:var(--red)}.muted{color:var(--text2)}
-`;
-
-// ---------- LOGIN ----------
-const LOGIN_HTML = `<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>TradeHub · Login</title>
-<style>
-${BASE_CSS}
-body{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(circle at 50% 0%,#1a1f2b 0%,#0b0e11 60%)}
-.card{background:var(--panel);padding:36px 28px;border-radius:16px;width:100%;max-width:400px;border:1px solid var(--border);box-shadow:0 30px 80px rgba(0,0,0,.6)}
-.logo{font-size:26px;font-weight:800;color:var(--yellow);text-align:center;letter-spacing:-1px;margin-bottom:4px}
-.tag{color:var(--text2);font-size:12px;text-align:center;margin-bottom:28px}
-.tabs{display:flex;background:var(--panel2);border-radius:8px;padding:4px;margin-bottom:20px}
-.tab{flex:1;padding:9px;text-align:center;font-size:13px;font-weight:600;color:var(--text2);border-radius:6px;background:transparent;transition:all .15s}
-.tab.active{background:var(--hover);color:var(--text)}
-form{display:flex;flex-direction:column;gap:12px}
-.field{display:flex;flex-direction:column;gap:6px}
-.field label{font-size:11px;color:var(--text2);font-weight:500}
-.primary{background:var(--yellow);color:#0b0e11;font-weight:700;padding:12px;font-size:14px;margin-top:6px}
-.primary:hover{background:var(--yellow2)}
-.err{color:var(--red);font-size:12px;text-align:center;min-height:16px;margin-top:8px}
-.hint{color:var(--text3);font-size:11px;text-align:center;margin-top:20px;line-height:1.6}
-</style></head><body>
-<div class="card">
-  <div class="logo">⚡ TradeHub</div>
-  <div class="tag">Multi-asset paper trading</div>
-  <div class="tabs">
-    <button class="tab active" data-tab="login" type="button">Login</button>
-    <button class="tab" data-tab="register" type="button">Register</button>
-  </div>
-  <form id="loginForm">
-    <div class="field"><label>Username or email</label><input name="username" required autocomplete="username"></div>
-    <div class="field"><label>Password</label><input name="password" type="password" required autocomplete="current-password"></div>
-    <button type="submit" class="primary">Log In</button>
-  </form>
-  <form id="registerForm" style="display:none">
-    <div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email"></div>
-    <div class="field"><label>Username</label><input name="username" required pattern="[a-zA-Z0-9_]{3,20}" autocomplete="username"></div>
-    <div class="field"><label>Password (8+ chars)</label><input name="password" type="password" required minlength="8" autocomplete="new-password"></div>
-    <button type="submit" class="primary">Create Account</button>
-  </form>
-  <form id="twofaForm" style="display:none">
-    <div class="field"><label>2FA code (6 digits)</label><input name="code" inputmode="numeric" maxlength="6" required></div>
-    <button type="submit" class="primary">Verify</button>
-  </form>
-  <div class="err" id="err"></div>
-  <div class="hint">Start with $100k USDT + $100k USD + BTC/ETH/SOL + EUR/GBP/JPY.</div>
-</div>
-<script>
-var tabs=document.querySelectorAll('.tab'),lf=document.getElementById('loginForm'),rf=document.getElementById('registerForm'),tf=document.getElementById('twofaForm'),err=document.getElementById('err');
-var tempToken=null;
-tabs.forEach(function(t){t.onclick=function(){tabs.forEach(function(x){x.classList.remove('active')});t.classList.add('active');var isL=t.dataset.tab==='login';lf.style.display=isL?'flex':'none';rf.style.display=isL?'none':'flex';tf.style.display='none';err.textContent=''}});
-async function post(url,data){var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return [r.ok,await r.json()]}
-lf.onsubmit=async function(e){e.preventDefault();var res=await post('/api/auth/login',Object.fromEntries(new FormData(lf)));if(!res[0]){err.textContent=res[1].error;return}if(res[1].requires2FA){tempToken=res[1].tempToken;lf.style.display='none';tf.style.display='flex';return}location.href='/'};
-tf.onsubmit=async function(e){e.preventDefault();var data=Object.fromEntries(new FormData(tf));data.tempToken=tempToken;var res=await post('/api/auth/verify-2fa',data);if(res[0])location.href='/';else err.textContent=res[1].error};
-rf.onsubmit=async function(e){e.preventDefault();var res=await post('/api/auth/register',Object.fromEntries(new FormData(rf)));if(res[0])location.href='/';else err.textContent=res[1].error};
-fetch('/api/auth/me').then(function(r){if(r.ok)location.href='/'});
-</script></body></html>`;
-
-// ---------- MAIN APP ----------
-const APP_HTML = `<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>TradeHub</title>
-<style>
-${BASE_CSS}
-html,body{height:100%;overflow:hidden}
-body{display:flex;flex-direction:column}
-.topbar{background:var(--panel);padding:10px 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);flex-shrink:0}
-.brand{color:var(--yellow);font-weight:800;font-size:16px}
-.conn{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--green)}
-.conn .dot{width:7px;height:7px;background:var(--green);border-radius:50%;animation:pulse 1.5s infinite}
-@keyframes pulse{50%{opacity:.3}}
-.spacer{flex:1}
-.user-chip{color:var(--text2);font-size:12px}
-.user-chip b{color:var(--text)}
-
-.pages{flex:1;position:relative;overflow:hidden}
-.page{position:absolute;top:0;left:0;right:0;bottom:0;overflow-y:auto;display:none;padding-bottom:8px}
-.page.active{display:block}
-
-/* Bottom nav */
-.nav{background:var(--panel);border-top:1px solid var(--border);display:flex;flex-shrink:0;padding-bottom:env(safe-area-inset-bottom,0)}
-.nav button{flex:1;background:transparent;color:var(--text2);padding:10px 0 8px;font-size:10px;font-weight:500;display:flex;flex-direction:column;align-items:center;gap:3px;border-radius:0;border:none;cursor:pointer}
-.nav button.active{color:var(--yellow)}
-.nav button .ic{font-size:17px;line-height:1}
-.nav button i{font-style:normal;font-size:18px}
-
-/* Markets page */
-.cat-tabs{display:flex;overflow-x:auto;background:var(--panel);border-bottom:1px solid var(--border);flex-shrink:0;position:sticky;top:0;z-index:5}
-.cat-tabs::-webkit-scrollbar{display:none}
-.cat-tab{flex-shrink:0;padding:12px 16px;font-size:12px;font-weight:600;color:var(--text2);border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap}
-.cat-tab.active{color:var(--yellow);border-bottom-color:var(--yellow)}
-.instr-list{padding:4px 0}
-.instr{padding:10px 16px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;border-bottom:1px solid rgba(43,49,57,.4)}
-.instr:active{background:var(--hover)}
-.instr .name{display:flex;flex-direction:column;gap:2px}
-.instr .name b{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600}
-.instr .name .sub{font-size:10px;color:var(--text3)}
-.instr .right{text-align:right;display:flex;flex-direction:column;gap:2px}
-.instr .price{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:500}
-.instr .chg{font-family:'JetBrains Mono',monospace;font-size:10px}
-.spark{width:56px;height:24px;margin-left:10px;flex-shrink:0}
-.spark path{fill:none;stroke-width:1.5}
-
-/* Trade page */
-.trade-head{padding:10px 14px;border-bottom:1px solid var(--border);background:var(--panel);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-.symbig{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700}
-.bigprice{font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:600}
-.trade-stats{display:flex;gap:16px;font-size:11px;flex-wrap:wrap}
-.trade-stats .stat{display:flex;flex-direction:column;gap:2px}
-.trade-stats .lbl{color:var(--text3);font-size:10px}
-.trade-stats .val{font-family:'JetBrains Mono',monospace;font-weight:500}
-
-.chartwrap{padding:6px 14px 0;display:flex;flex-direction:column;background:var(--bg)}
-.candles{height:200px;display:flex;align-items:flex-end;gap:2px;padding:8px 60px 0 0;position:relative;border-bottom:1px solid var(--border);overflow:hidden}
-.candle{flex:1;min-width:2px;max-width:18px;display:flex;flex-direction:column;justify-content:flex-end;position:relative}
-.candle .wick{width:1px;background:#5e6673;position:absolute;left:50%;transform:translateX(-50%)}
-.candle .body{width:100%;position:relative;z-index:2;border-radius:1px;min-height:1px}
-.candle.green .body{background:var(--green)}
-.candle.red .body{background:var(--red)}
-.paxis{position:absolute;right:0;top:0;bottom:0;width:60px;display:flex;flex-direction:column;justify-content:space-between;padding:8px 0;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--text3);pointer-events:none;border-left:1px solid var(--border)}
-.paxis span{text-align:right;padding-right:6px}
-.volrow{display:flex;align-items:flex-end;gap:2px;height:30px;padding:4px 60px 6px 0;margin-bottom:6px}
-.vbar{flex:1;min-width:2px;max-width:18px;background:#2b3139;border-radius:1px}
-.vbar.green{background:rgba(14,203,129,.4)}
-.vbar.red{background:rgba(246,70,93,.4)}
-
-.tabs-section{background:var(--panel);border-top:1px solid var(--border);border-bottom:1px solid var(--border);display:flex}
-.tabs-section .sec-tab{flex:1;padding:10px 0;text-align:center;font-size:12px;font-weight:600;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent}
-.tabs-section .sec-tab.active{color:var(--yellow);border-bottom-color:var(--yellow)}
-
-.ob-row{display:flex;justify-content:space-between;padding:3px 14px;font-size:11px;font-family:'JetBrains Mono',monospace;position:relative;height:20px;align-items:center;cursor:pointer}
-.ob-row:hover{background:var(--hover)}
-.ob-row .depth{position:absolute;right:0;top:0;bottom:0;background:rgba(246,70,93,.08);width:0}
-.ob-row.bid .depth{background:rgba(14,203,129,.08);right:auto;left:0}
-.ob-row .p,.ob-row .a{position:relative;z-index:1}
-.ob-row.ask .p{color:var(--red)}
-.ob-row.bid .p{color:var(--green)}
-.ob-row .a{color:var(--text2)}
-.spread{display:flex;justify-content:space-between;padding:7px 14px;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:2px 0}
-.tlist{padding:2px 0}
-.trow{display:flex;justify-content:space-between;padding:3px 14px;font-size:11px;font-family:'JetBrains Mono',monospace;height:20px;align-items:center}
-.trow .p.b{color:var(--green)}.trow .p.s{color:var(--red)}
-.trow .a{color:var(--text2)}.trow .t{color:var(--text3);font-size:10px}
-
-.oform{padding:12px;border-top:1px solid var(--border);background:var(--panel)}
-.otype{display:flex;gap:4px;margin-bottom:10px}
-.otype span{font-size:11px;padding:5px 9px;border-radius:3px;color:var(--text2);cursor:pointer;font-weight:500}
-.otype span.on{background:var(--hover);color:var(--text);font-weight:600}
-.inp{display:flex;align-items:center;background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:8px 10px;margin-bottom:8px}
-.inp:focus-within{border-color:var(--yellow)}
-.inp .lbl{color:var(--text2);font-size:11px;flex-shrink:0;margin-right:8px}
-.inp input{background:transparent;border:none;padding:0;text-align:right;font-family:'JetBrains Mono',monospace;font-weight:500;font-size:12px;color:var(--text);outline:none}
-.inp .suf{color:var(--text3);font-size:11px;margin-left:6px}
-.pct-row{display:flex;gap:4px;margin-bottom:10px}
-.pct{flex:1;background:var(--panel2);border:1px solid var(--border);border-radius:3px;padding:5px 0;text-align:center;font-size:10px;color:var(--text2);cursor:pointer}
-.pct:hover{background:var(--hover);color:var(--text)}
-.acts{display:flex;gap:8px}
-.buybtn,.sellbtn{flex:1;padding:11px;font-size:13px;font-weight:700}
-.buybtn{background:var(--green);color:#0b0e11}
-.buybtn:hover{background:#0db475}
-.sellbtn{background:var(--red);color:#fff}
-.sellbtn:hover{background:#e0354b}
-
-/* Portfolio page */
-.pt-card{background:var(--panel);border-radius:10px;margin:12px;padding:14px;border:1px solid var(--border)}
-.pt-card h3{font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;font-weight:600;margin-bottom:10px}
-.pnl-big{display:flex;gap:24px;flex-wrap:wrap}
-.pnl-big .item{display:flex;flex-direction:column;gap:3px}
-.pnl-big .lbl{color:var(--text3);font-size:10px;text-transform:uppercase}
-.pnl-big .val{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:18px}
-table{width:100%;border-collapse:collapse;font-size:11px;font-family:'JetBrains Mono',monospace}
-th,td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--border);white-space:nowrap}
-th{color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase;font-family:Inter,sans-serif}
-.pill{padding:2px 7px;border-radius:9px;font-size:10px;font-weight:600;font-family:Inter,sans-serif}
-.pill.buy{background:rgba(14,203,129,.15);color:var(--green)}
-.pill.sell{background:rgba(246,70,93,.15);color:var(--red)}
-.pill.open{background:rgba(240,185,11,.15);color:var(--yellow)}
-.pill.filled{background:rgba(14,203,129,.15);color:var(--green)}
-.pill.partial{background:rgba(30,108,245,.15);color:#4a8dfa}
-.pill.cancelled{background:rgba(132,142,156,.15);color:var(--text2)}
-.xbtn{background:transparent;color:var(--red);padding:3px 6px;font-size:10px;border:1px solid var(--red);border-radius:4px;cursor:pointer}
-.empty{padding:24px;text-align:center;color:var(--text3);font-size:12px}
-.subtabs{display:flex;background:var(--panel2);border-radius:8px;padding:3px;margin-bottom:10px}
-.subtabs span{flex:1;text-align:center;padding:7px;font-size:11px;font-weight:600;color:var(--text2);border-radius:6px;cursor:pointer}
-.subtabs span.active{background:var(--hover);color:var(--text)}
-
-/* Account page */
-.acct{display:flex;flex-direction:column;gap:0}
-.acct-item{padding:14px 16px;background:var(--panel);display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);cursor:pointer;font-size:13px}
-.acct-item:active{background:var(--hover)}
-.acct-item .right{color:var(--text2);font-size:12px}
-.acct-item .right.up{color:var(--green)}
-.acct-item b{color:var(--text)}
-.twofa-box{background:var(--panel2);padding:14px;border-radius:8px;margin:10px 16px;border:1px solid var(--border);font-size:12px;line-height:1.6}
-.twofa-box code{background:var(--bg);padding:8px 10px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:12px;display:block;margin:8px 0;word-break:break-all;color:var(--yellow)}
-.btn-yellow{background:var(--yellow);color:#0b0e11;padding:10px 16px;font-weight:700;font-size:13px;border-radius:6px;border:none;cursor:pointer}
-.btn-red{background:var(--red);color:#fff;padding:10px 16px;font-weight:700;font-size:13px;border-radius:6px;border:none;cursor:pointer}
-
-.toasts{position:fixed;top:64px;right:16px;z-index:1000;display:flex;flex-direction:column;gap:8px}
-.toast{background:var(--panel2);border-left:3px solid var(--yellow);padding:12px 16px;border-radius:4px;font-size:12px;box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:220px;animation:sl .3s}
-.toast.ok{border-left-color:var(--green)}
-.toast.err{border-left-color:var(--red)}
-@keyframes sl{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
-@keyframes flasup{0%{background:rgba(14,203,129,.25)}100%{background:transparent}}
-@keyframes flasdn{0%{background:rgba(246,70,93,.25)}100%{background:transparent}}
-.fu{animation:flasup .6s}
-.fd{animation:flasdn .6s}
-
-.alert-bar{background:linear-gradient(90deg,#f0b90b,#d4a30a);color:#0b0e11;padding:8px 16px;font-size:11px;font-weight:600;text-align:center}
-</style></head><body>
-
-<header class="topbar">
-  <div class="brand">⚡ TradeHub</div>
-  <div class="conn"><span class="dot"></span><span id="connTxt">Live</span></div>
-  <div class="spacer"></div>
-  <div class="user-chip" id="userChip"></div>
-</header>
-
-<div class="pages">
-
-  <!-- MARKETS PAGE -->
-  <div class="page active" id="page-markets">
-    <div class="cat-tabs" id="catTabs">
-      <div class="cat-tab active" data-cat="crypto">Crypto</div>
-      <div class="cat-tab" data-cat="forex">Forex</div>
-      <div class="cat-tab" data-cat="commodities">Commodities</div>
-      <div class="cat-tab" data-cat="stocks">Stocks</div>
-      <div class="cat-tab" data-cat="indices">Indices</div>
-    </div>
-    <div class="instr-list" id="instrList"></div>
-  </div>
-
-  <!-- TRADE PAGE -->
-  <div class="page" id="page-trade">
-    <div class="trade-head">
-      <div class="symbig" id="symBig">BTC/USDT</div>
-      <div class="bigprice" id="bigPrice">—</div>
-      <div class="trade-stats">
-        <div class="stat"><span class="lbl">24h High</span><span class="val" id="h24">—</span></div>
-        <div class="stat"><span class="lbl">24h Low</span><span class="val" id="l24">—</span></div>
-        <div class="stat"><span class="lbl">24h Vol</span><span class="val" id="v24">—</span></div>
-      </div>
-    </div>
-
-    <div class="chartwrap">
-      <div class="candles" id="candles">
-        <div class="paxis" id="paxis"></div>
-      </div>
-      <div class="volrow" id="volrow"></div>
-    </div>
-
-    <div class="tabs-section">
-      <div class="sec-tab active" data-sec="ob">Order Book</div>
-      <div class="sec-tab" data-sec="tr">Trades</div>
-      <div class="sec-tab" data-sec="my">My Orders</div>
-    </div>
-
-    <div id="secContent">
-      <div class="ob" id="obView">
-        <div id="obAsks"></div>
-        <div class="spread"><span id="spPrice">—</span><span id="spVal" class="muted">—</span></div>
-        <div id="obBids"></div>
-      </div>
-      <div class="tlist" id="tradesView" style="display:none"></div>
-      <div id="myOrdersView" style="display:none;padding:6px 0"></div>
-    </div>
-
-    <form class="oform" id="orderForm" onsubmit="return false">
-      <div class="otype">
-        <span class="on" data-otype="limit">Limit</span><span data-otype="market">Market</span>
-      </div>
-      <div class="inp" id="priceRow"><span class="lbl">Price</span><input id="fPrice" type="number" step="any"><span class="suf" id="fQuote">USDT</span></div>
-      <div class="inp"><span class="lbl">Amount</span><input id="fAmount" type="number" step="any"><span class="suf" id="fBase">BTC</span></div>
-      <div class="pct-row">
-        <div class="pct" data-pct="25">25%</div>
-        <div class="pct" data-pct="50">50%</div>
-        <div class="pct" data-pct="75">75%</div>
-        <div class="pct" data-pct="100">100%</div>
-      </div>
-      <div class="inp"><span class="lbl">Total</span><input id="fTotal" readonly><span class="suf" id="fTotalQuote">USDT</span></div>
-      <div class="acts">
-        <button type="button" class="buybtn" id="btnBuy">Buy</button>
-        <button type="button" class="sellbtn" id="btnSell">Sell</button>
-      </div>
-    </form>
-  </div>
-
-  <!-- PORTFOLIO PAGE -->
-  <div class="page" id="page-portfolio">
-    <div class="pt-card">
-      <h3>Performance</h3>
-      <div class="pnl-big">
-        <div class="item"><span class="lbl">Realized P&L</span><span class="val" id="pnlReal">—</span></div>
-        <div class="item"><span class="lbl">Unrealized P&L</span><span class="val" id="pnlUnreal">—</span></div>
-        <div class="item"><span class="lbl">Total P&L</span><span class="val" id="pnlTotal">—</span></div>
-      </div>
-    </div>
-
-    <div class="pt-card">
-      <div class="subtabs" id="portTabs">
-        <span class="active" data-ptab="balances">Balances</span>
-        <span data-ptab="positions">Positions</span>
-        <span data-ptab="orders">Orders</span>
-        <span data-ptab="history">History</span>
-      </div>
-      <div id="portContent"><div class="empty">Loading…</div></div>
-    </div>
-  </div>
-
-  <!-- ACCOUNT PAGE -->
-  <div class="page" id="page-account">
-    <div class="acct">
-      <div class="acct-item"><b>Username</b><span class="right" id="acctUser">—</span></div>
-      <div class="acct-item"><b>Email</b><span class="right" id="acctEmail">—</span></div>
-      <div class="acct-item"><b>Role</b><span class="right" id="acctRole">—</span></div>
-      <div class="acct-item" id="adminRow" style="display:none"><b>Admin Panel</b><span class="right">→</span></div>
-    </div>
-
-    <div class="twofa-box" id="twofaBox">
-      <b>Two-Factor Authentication</b>
-      <div id="twofaStatus" style="margin-top:6px;color:var(--text2)">Loading…</div>
-      <div id="twofaActions" style="margin-top:10px"></div>
-    </div>
-
-    <div style="padding:12px 16px">
-      <button class="btn-red" style="width:100%" id="logoutBtn">Logout</button>
-    </div>
-
-    <div class="pt-card" style="margin-top:0">
-      <h3>About</h3>
-      <div style="color:var(--text2);font-size:11px;line-height:1.7">
-        TradeHub is a paper-trading simulator. No real money. Prices stream from public feeds. Use for learning only.
-      </div>
-    </div>
-  </div>
-
-</div>
-
-<nav class="nav" id="nav">
-  <button class="active" data-page="markets"><span class="ic">📊</span>Markets</button>
-  <button data-page="trade"><span class="ic">📈</span>Trade</button>
-  <button data-page="portfolio"><span class="ic">💼</span>Portfolio</button>
-  <button data-page="account"><span class="ic">👤</span>Account</button>
-</nav>
-
-<div class="toasts" id="toasts"></div>
-
-<script>
-var PAIRS_LIST = ${JSON.stringify(PAIRS)};
-var PAIR_START = {};
-var PAIR_CAT = {};
-PAIRS_LIST.forEach(function(p){PAIR_START[p.symbol]=p.start;PAIR_CAT[p.symbol]=p.cat});
-
-function $(s){return document.querySelector(s)}
-function $$(s){return document.querySelectorAll(s)}
-function fmt(n,d){if(n==null||isNaN(n))return'—';return Number(n).toLocaleString('en-US',{minimumFractionDigits:d==null?2:d,maximumFractionDigits:d==null?2:d})}
-function fp(p){if(p==null||isNaN(p))return'—';if(p>=1000)return fmt(p,2);if(p>=1)return p.toFixed(2);if(p>=0.01)return p.toFixed(4);return p.toFixed(6)}
-
-var state={
-  symbol:'BTCUSDT',
-  category:'crypto',
-  page:'markets',
-  pairs:[],
-  prices:{},
-  candles:[],
-  balances:[],
-  orders:[],
-  history:[],
-  pnl:null,
-  section:'ob',
-  portTab:'balances',
-  orderType:'limit',
-  user:null
-};
-
-function toast(msg,type){var t=document.createElement('div');t.className='toast '+(type||'');t.textContent=msg;$('#toasts').appendChild(t);setTimeout(function(){t.style.transition='opacity .3s,transform .3s';t.style.opacity='0';t.style.transform='translateX(30px)';setTimeout(function(){t.remove()},300)},3200)}
-
-// ---------- WS ----------
-var ws;
-function connectWS(){
-  var proto=location.protocol==='https:'?'wss://':'ws://';
-  ws=new WebSocket(proto+location.host+'/ws');
-  ws.onopen=function(){$('#connTxt').textContent='Live'};
-  ws.onmessage=function(e){try{var m=JSON.parse(e.data);if(m.symbol&&m.price)onPrice(m.symbol,m.price)}catch(err){}};
-  ws.onclose=function(){$('#connTxt').textContent='Offline';setTimeout(connectWS,3000)};
-  ws.onerror=function(){$('#connTxt').textContent='Offline'};
-}
-
-// ---------- INIT ----------
-async function init(){
-  var me=await fetch('/api/auth/me');
-  if(!me.ok){location.href='/login';return}
-  var meData=await me.json();
-  state.user=meData.user;
-  $('#userChip').innerHTML='<b>'+state.user.username+'</b>';
-  $('#acctUser').textContent=state.user.username;
-  $('#acctEmail').textContent=state.user.email;
-  $('#acctRole').textContent=state.user.isAdmin?'Admin':'User';
-  $('#acctRole').className='right '+(state.user.isAdmin?'up':'');
-  if(state.user.isAdmin)$('#adminRow').style.display='flex';
-  render2FA();
-
-  var pr=await fetch('/api/pairs');
-  var pj=await pr.json();
-  state.pairs=pj.pairs;
-  pj.pairs.forEach(function(p){state.prices[p.symbol]=p.price});
-
-  renderMarkets();
-  switchSymbol(state.symbol, true);
-  await Promise.all([refreshBalances(), refreshOrders(), refreshHistory(), refreshPnL()]);
-  connectWS();
-}
-
-// ---------- PAGE NAV ----------
-$$('.nav button').forEach(function(b){b.onclick=function(){
-  setPage(b.dataset.page);
-}});
-function setPage(p){
-  state.page=p;
-  $$('.page').forEach(function(el){el.classList.remove('active')});
-  $('#page-'+p).classList.add('active');
-  $$('.nav button').forEach(function(b){b.classList.toggle('active',b.dataset.page===p)});
-}
-
-// ---------- CATEGORY TABS ----------
-$$('.cat-tab').forEach(function(t){t.onclick=function(){
-  state.category=t.dataset.cat;
-  $$('.cat-tab').forEach(function(x){x.classList.toggle('active',x.dataset.cat===state.category)});
-  renderMarkets();
-}});
-
-// ---------- MARKETS LIST ----------
-function renderMarkets(){
-  var filtered=state.pairs.filter(function(p){return p.cat===state.category});
-  var el=$('#instrList');
-  if(!filtered.length){el.innerHTML='<div class="empty">No instruments.</div>';return}
-  el.innerHTML=filtered.map(function(p){
-    var price=state.prices[p.symbol]||p.start;
-    var base=PAIR_START[p.symbol]||p.start;
-    var chg=((price-base)/base)*100;
-    var cls=chg>=0?'up':'down';
-    // sparkline
-    var pts=[];
-    for(var i=0;i<20;i++){
-      var v=base*(1+(Math.sin(i*0.7+p.symbol.charCodeAt(0))*0.003)+(Math.random()-0.5)*0.002);
-      pts.push((i*3)+','+(20-Math.max(2,Math.min(18,(v/base-1)*2000+10))));
-    }
-    var sparkColor=chg>=0?'var(--green)':'var(--red)';
-    return '<div class="instr" data-sym="'+p.symbol+'">'+
-      '<div class="name"><b>'+p.base+'/'+p.quote+'</b><span class="sub">'+p.cat.toUpperCase()+'</span></div>'+
-      '<div style="display:flex;align-items:center">'+
-        '<svg class="spark" viewBox="0 0 60 24" preserveAspectRatio="none"><path d="M'+pts.join(' L ')+'" stroke="'+sparkColor+'"/></svg>'+
-        '<div class="right"><div class="price '+cls+'">'+fp(price)+'</div><div class="chg '+cls+'">'+(chg>=0?'+':'')+chg.toFixed(2)+'%</div></div>'+
-      '</div>'+
-    '</div>';
-  }).join('');
-  $$('.instr').forEach(function(el){el.onclick=function(){
-    switchSymbol(el.dataset.sym);
-    setPage('trade');
-  }});
-}
-
-// ---------- PRICE UPDATES ----------
-function onPrice(sym,price){
-  var prev=state.prices[sym];
-  state.prices[sym]=price;
-  // Update instrument row
-  var row=document.querySelector('.instr[data-sym="'+sym+'"]');
-  if(row){
-    var pEl=row.querySelector('.price');
-    var cEl=row.querySelector('.chg');
-    var base=PAIR_START[sym]||price;
-    var totalChg=((price-base)/base)*100;
-    pEl.textContent=fp(price);
-    pEl.className='price '+(totalChg>=0?'up':'down');
-    cEl.textContent=(totalChg>=0?'+':'')+totalChg.toFixed(2)+'%';
-    cEl.className='chg '+(totalChg>=0?'up':'down');
-  }
-  // Update active symbol
-  if(sym===state.symbol){
-    var el=$('#bigPrice');
-    var up=price>=(prev||price);
-    el.textContent=fp(price);
-    el.classList.remove('fu','fd');void el.offsetWidth;
-    el.classList.add(up?'fu':'fd');
-    el.classList.remove('up','down');el.classList.add(up?'up':'down');
-    updateLastCandle(price);
-    updateOrderBook(price);
-  }
-}
-
-// ---------- SYMBOL SWITCH ----------
-function switchSymbol(sym, skipPageSwitch){
-  state.symbol=sym;
-  var p=state.pairs.find(function(x){return x.symbol===sym});
-  if(!p)return;
-  $('#symBig').textContent=p.base+'/'+p.quote;
-  $('#fQuote').textContent=p.quote;
-  $('#fBase').textContent=p.base;
-  $('#fTotalQuote').textContent=p.quote;
-  var price=state.prices[sym];
-  $('#bigPrice').textContent=fp(price);
-  $('#fPrice').value=fp(price);
-  $('#fAmount').value='';
-  $('#fTotal').value='';
-  generateCandles(p);
-  updateStats(p);
-  updateOrderBook(price);
-  loadTrades();
-  renderMyOrders();
-}
-
-function updateStats(p){
-  var price=state.prices[p.symbol]||p.start;
-  $('#h24').textContent=fp(price*1.02);
-  $('#l24').textContent=fp(price*0.98);
-  $('#v24').textContent=fmt(Math.random()*50000+10000,0)+' '+p.base;
-}
-
-// ---------- CHART ----------
-function generateCandles(p){
-  var n=44, arr=[];
-  var base=PAIR_START[p.symbol]||p.price||1;
-  var vol=base*0.006;
-  for(var i=0;i<n;i++){
-    var o=base+(Math.random()-0.5)*vol;
-    var c=o+(Math.random()-0.5)*vol*1.2;
-    var h=Math.max(o,c)+Math.random()*vol*0.6;
-    var l=Math.min(o,c)-Math.random()*vol*0.6;
-    arr.push({o:o,c:c,h:h,l:l,v:Math.random()*80+20,g:c>=o});
-    base=c;
-  }
-  state.candles=arr;
-  renderChart();
-}
-function updateLastCandle(price){
-  if(!state.candles.length)return;
-  var last=state.candles[state.candles.length-1];
-  last.c=price;last.h=Math.max(last.h,price);last.l=Math.min(last.l,price);last.g=last.c>=last.o;
-  renderChart();
-}
-function renderChart(){
-  var box=$('#candles'), paxis=$('#paxis'), vrow=$('#volrow');
-  Array.from(box.querySelectorAll('.candle')).forEach(function(el){el.remove()});
-  vrow.innerHTML='';
-  if(!state.candles.length)return;
-  var mn=Infinity,mx=-Infinity;
-  state.candles.forEach(function(c){mn=Math.min(mn,c.l);mx=Math.max(mx,c.h)});
-  var pad=(mx-mn)*0.08||1;mn-=pad;mx+=pad;
-  var range=mx-mn;
-  paxis.innerHTML='';
-  for(var i=5;i>=0;i--){
-    var s=document.createElement('span');
-    s.textContent=fp(mn+range*i/5);
-    paxis.appendChild(s);
-  }
-  var maxV=Math.max.apply(null,state.candles.map(function(c){return c.v}).concat([1]));
-  state.candles.forEach(function(c){
-    var el=document.createElement('div');
-    el.className='candle '+(c.g?'green':'red');
-    var bodyH=Math.max(1,((Math.abs(c.c-c.o))/range)*100);
-    var bodyB=((Math.min(c.o,c.c)-mn)/range)*100;
-    var wickT=((c.h-mn)/range)*100;
-    var wickB=((c.l-mn)/range)*100;
-    el.innerHTML='<div class="wick" style="height:'+(wickT-wickB)+'%;bottom:'+wickB+'%"></div><div class="body" style="height:'+bodyH+'%;margin-bottom:'+bodyB+'%"></div>';
-    box.appendChild(el);
-    var vb=document.createElement('div');
-    vb.className='vbar '+(c.g?'green':'red');
-    vb.style.height=Math.max(10,(c.v/maxV)*100)+'%';
-    vrow.appendChild(vb);
-  });
-}
-
-// ---------- ORDER BOOK ----------
-function updateOrderBook(mid){
-  if(!mid)return;
-  var step=Math.max(mid*0.0004,0.0001);
-  var asks=[],bids=[],cumA=0,cumB=0;
-  for(var i=1;i<=8;i++){
-    var aa=0.05+Math.random()*2.5;
-    var ab=0.05+Math.random()*2.5;
-    cumA+=aa;cumB+=ab;
-    asks.push({p:mid+step*i,a:aa,c:cumA});
-    bids.push({p:mid-step*i,a:ab,c:cumB});
-  }
-  var maxA=cumA,maxB=cumB;
-  $('#obAsks').innerHTML=asks.reverse().map(function(r){
-    var w=Math.min(100,(r.c/maxA)*100);
-    return '<div class="ob-row ask" data-p="'+r.p+'"><div class="depth" style="width:'+w+'%"></div><span class="p">'+fp(r.p)+'</span><span class="a">'+r.a.toFixed(4)+'</span></div>';
-  }).join('');
-  $('#obBids').innerHTML=bids.map(function(r){
-    var w=Math.min(100,(r.c/maxB)*100);
-    return '<div class="ob-row bid" data-p="'+r.p+'"><div class="depth" style="width:'+w+'%"></div><span class="p">'+fp(r.p)+'</span><span class="a">'+r.a.toFixed(4)+'</span></div>';
-  }).join('');
-  $('#spPrice').textContent=fp(mid);
-  $('#spVal').textContent='Spread '+step.toFixed(4);
-  $$('.ob-row').forEach(function(el){el.onclick=function(){$('#fPrice').value=el.dataset.p;recalcTotal()}});
-}
-
-// ---------- TRADES ----------
-async function loadTrades(){
-  var r=await fetch('/api/trades/'+state.symbol);
-  var data=await r.json();
-  renderTrades(data.trades);
-}
-function renderTrades(trades){
-  var el=$('#tradesView');
-  if(!trades.length){
-    var mid=state.prices[state.symbol];
-    trades=[];
-    for(var i=0;i<25;i++)trades.push({price:mid*(1+(Math.random()-0.5)*0.001),amount:Math.random()*1.5,created_at:Math.floor(Date.now()/1000)-i*30,buyer_id:1,seller_id:2});
-  }
-  el.innerHTML=trades.slice(0,20).map(function(t){
-    var isBuy=(t.buyer_id||0)<(t.seller_id||999);
-    var time=new Date((t.created_at||Math.floor(Date.now()/1000))*1000);
-    var ts=('0'+time.getHours()).slice(-2)+':'+('0'+time.getMinutes()).slice(-2)+':'+('0'+time.getSeconds()).slice(-2);
-    return '<div class="trow"><span class="p '+(isBuy?'b':'s')+'">'+fp(t.price)+'</span><span class="a">'+(t.amount||0).toFixed(4)+'</span><span class="t">'+ts+'</span></div>';
-  }).join('');
-}
-
-// ---------- SECTION TABS (order book / trades / my orders) ----------
-$$('.sec-tab').forEach(function(t){t.onclick=function(){
-  state.section=t.dataset.sec;
-  $$('.sec-tab').forEach(function(x){x.classList.toggle('active',x.dataset.sec===state.section)});
-  $('#obView').style.display=state.section==='ob'?'block':'none';
-  $('#tradesView').style.display=state.section==='tr'?'block':'none';
-  $('#myOrdersView').style.display=state.section==='my'?'block':'none';
-  if(state.section==='tr')loadTrades();
-  if(state.section==='my')renderMyOrders();
-}});
-
-function renderMyOrders(){
-  var el=$('#myOrdersView');
-  var open=state.orders.filter(function(o){return o.symbol===state.symbol});
-  if(!open.length){el.innerHTML='<div class="empty">No open orders for '+state.symbol.replace('USD','/USD').replace('USDT','/USDT')+'.</div>';return}
-  el.innerHTML='<table><thead><tr><th>Side</th><th>Type</th><th>Price</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>'+
-    open.map(function(o){return '<tr>'+
-      '<td><span class="pill '+o.side+'">'+o.side.toUpperCase()+'</span></td>'+
-      '<td>'+o.type+'</td><td>'+fp(o.price)+'</td><td>'+o.amount+'</td>'+
-      '<td><span class="pill '+o.status+'">'+o.status+'</span></td>'+
-      '<td><button class="xbtn" onclick="cancelOrder('+o.id+')">Cancel</button></td>'+
-    '</tr>'}).join('')+'</tbody></table>';
-}
-
-// ---------- P&L + BALANCES ----------
-async function refreshBalances(){
-  var r=await fetch('/api/balances');
-  var data=await r.json();
-  state.balances=data.balances;
-  if(state.portTab==='balances')renderPortfolio();
-}
-async function refreshPnL(){
-  var r=await fetch('/api/pnl');
-  if(!r.ok)return;
-  state.pnl=await r.json();
-  var realEl=$('#pnlReal'), unEl=$('#pnlUnreal'), totEl=$('#pnlTotal');
-  var total=(state.pnl.realized||0)+(state.pnl.unrealized||0);
-  realEl.textContent='$'+fmt(state.pnl.realized,2);
-  realEl.className='val '+(state.pnl.realized>=0?'up':'down');
-  unEl.textContent='$'+fmt(state.pnl.unrealized,2);
-  unEl.className='val '+(state.pnl.unrealized>=0?'up':'down');
-  totEl.textContent='$'+fmt(total,2);
-  totEl.className='val '+(total>=0?'up':'down');
-  if(state.portTab==='positions')renderPortfolio();
-}
-async function refreshOrders(){
-  var r=await fetch('/api/orders');
-  var data=await r.json();
-  state.orders=data.orders;
-  if(state.section==='my')renderMyOrders();
-  if(state.portTab==='orders')renderPortfolio();
-}
-async function refreshHistory(){
-  var r=await fetch('/api/orders/history');
-  var data=await r.json();
-  state.history=data.orders;
-  if(state.portTab==='history')renderPortfolio();
-}
-
-// ---------- PORTFOLIO PAGE ----------
-$$('#portTabs span').forEach(function(t){t.onclick=function(){
-  state.portTab=t.dataset.ptab;
-  $$('#portTabs span').forEach(function(x){x.classList.toggle('active',x.dataset.ptab===state.portTab)});
-  renderPortfolio();
-}});
-function renderPortfolio(){
-  var el=$('#portContent');
-  if(state.portTab==='balances'){
-    if(!state.balances.length){el.innerHTML='<div class="empty">No balances.</div>';return}
-    el.innerHTML='<table><thead><tr><th>Asset</th><th>Free</th><th>Locked</th><th>Total</th></tr></thead><tbody>'+
-      state.balances.map(function(b){return '<tr><td><b>'+b.symbol+'</b></td><td class="up">'+fmt(b.free,6)+'</td><td class="muted">'+fmt(b.locked,6)+'</td><td>'+fmt(b.free+b.locked,6)+'</td></tr>'}).join('')+
-      '</tbody></table>';
-    return;
-  }
-  if(state.portTab==='positions'){
-    if(!state.pnl||!state.pnl.positions||!state.pnl.positions.length){el.innerHTML='<div class="empty">No open positions.</div>';return}
-    el.innerHTML='<table><thead><tr><th>Asset</th><th>Qty</th><th>Avg</th><th>Now</th><th>Value</th><th>P&L</th><th>%</th></tr></thead><tbody>'+
-      state.pnl.positions.map(function(p){return '<tr>'+
-        '<td><b>'+p.base+'</b></td><td>'+fmt(p.qty,6)+'</td><td>'+fp(p.avgCost)+'</td><td>'+fp(p.currentPrice)+'</td>'+
-        '<td>$'+fmt(p.value,2)+'</td>'+
-        '<td class="'+(p.pnl>=0?'up':'down')+'">$'+fmt(p.pnl,2)+'</td>'+
-        '<td class="'+(p.pnlPct>=0?'up':'down')+'">'+(p.pnlPct>=0?'+':'')+p.pnlPct.toFixed(2)+'%</td>'+
-      '</tr>'}).join('')+'</tbody></table>';
-    return;
-  }
-  if(state.portTab==='orders'){
-    if(!state.orders.length){el.innerHTML='<div class="empty">No open orders.</div>';return}
-    el.innerHTML='<table><thead><tr><th>Pair</th><th>Side</th><th>Price</th><th>Amt</th><th>Status</th><th></th></tr></thead><tbody>'+
-      state.orders.map(function(o){return '<tr>'+
-        '<td>'+o.symbol+'</td>'+
-        '<td><span class="pill '+o.side+'">'+o.side.toUpperCase()+'</span></td>'+
-        '<td>'+fp(o.price)+'</td><td>'+o.amount+'</td>'+
-        '<td><span class="pill '+o.status+'">'+o.status+'</span></td>'+
-        '<td><button class="xbtn" onclick="cancelOrder('+o.id+')">×</button></td>'+
-      '</tr>'}).join('')+'</tbody></table>';
-    return;
-  }
-  if(state.portTab==='history'){
-    if(!state.history.length){el.innerHTML='<div class="empty">No history.</div>';return}
-    el.innerHTML='<table><thead><tr><th>Pair</th><th>Side</th><th>Type</th><th>Price</th><th>Amt</th><th>Filled</th><th>Status</th></tr></thead><tbody>'+
-      state.history.slice(0,40).map(function(o){return '<tr>'+
-        '<td>'+o.symbol+'</td>'+
-        '<td><span class="pill '+o.side+'">'+o.side.toUpperCase()+'</span></td>'+
-        '<td>'+o.type+'</td><td>'+fp(o.price)+'</td><td>'+o.amount+'</td><td>'+o.filled+'</td>'+
-        '<td><span class="pill '+o.status+'">'+o.status+'</span></td>'+
-      '</tr>'}).join('')+'</tbody></table>';
-    return;
-  }
-}
-
-window.cancelOrder=async function(id){
-  var r=await fetch('/api/orders/'+id,{method:'DELETE'});
-  var j=await r.json();
-  if(j.ok){toast('Cancelled','');await refreshOrders();await refreshHistory();await refreshBalances();await refreshPnL()}
-  else toast(j.error||'Failed','err');
-};
-
-// ---------- ORDER FORM ----------
-function recalcTotal(){
-  var p=parseFloat($('#fPrice').value)||0;
-  var a=parseFloat($('#fAmount').value)||0;
-  if(state.orderType==='market')p=state.prices[state.symbol]||0;
-  $('#fTotal').value=p&&a?(p*a).toFixed(2):'';
-}
-$('#fPrice').oninput=recalcTotal;
-$('#fAmount').oninput=recalcTotal;
-
-$$('.otype span').forEach(function(s){s.onclick=function(){
-  $$('.otype span').forEach(function(x){x.classList.remove('on')});
-  s.classList.add('on');
-  state.orderType=s.dataset.otype;
-  if(state.orderType==='market'){
-    $('#priceRow').style.display='none';
-    $('#fPrice').value=state.prices[state.symbol]||'';
-  } else {
-    $('#priceRow').style.display='flex';
-  }
-  recalcTotal();
-}});
-
-$$('.pct').forEach(function(b){b.onclick=function(){
-  var pct=parseInt(b.dataset.pct);
-  var price=parseFloat($('#fPrice').value)||state.prices[state.symbol]||0;
-  var pair=state.pairs.find(function(x){return x.symbol===state.symbol});
-  if(!pair||!price)return;
-  var quoteBal=state.balances.find(function(x){return x.symbol===pair.quote});
-  var free=quoteBal?quoteBal.free:0;
-  var amount=(free*pct/100)/price;
-  $('#fAmount').value=amount.toFixed(6);
-  recalcTotal();
-}});
-
-async function placeOrder(side){
-  var pair=state.pairs.find(function(x){return x.symbol===state.symbol});
-  var price=parseFloat($('#fPrice').value)||state.prices[state.symbol];
-  var amount=parseFloat($('#fAmount').value);
-  if(!pair||!amount||amount<=0){toast('Enter a valid amount','err');return}
-  if(state.orderType==='limit'&&(!price||price<=0)){toast('Enter a valid price','err');return}
-  var body={symbol:state.symbol,side:side,amount:amount,type:state.orderType};
-  if(state.orderType==='limit')body.price=price;
-  var r=await fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  var j=await r.json();
-  if(j.ok){
-    if(state.orderType==='market')toast('Filled '+side.toUpperCase()+' '+amount+' '+pair.base+' @ '+fp(j.avgPrice||price),'ok');
-    else toast('Order placed','ok');
-    $('#fAmount').value='';$('#fTotal').value='';
-    await refreshOrders();await refreshHistory();await refreshBalances();await refreshPnL();
-    loadTrades();
-  } else toast(j.error||'Order failed','err');
-}
-$('#btnBuy').onclick=function(){placeOrder('buy')};
-$('#btnSell').onclick=function(){placeOrder('sell')};
-
-// ---------- ACCOUNT PAGE ----------
-$('#adminRow').onclick=function(){location.href='/admin'};
-$('#logoutBtn').onclick=async function(){await fetch('/api/auth/logout',{method:'POST'});location.href='/login'};
-
-function render2FA(){
-  var st=$('#twofaStatus'),ac=$('#twofaActions');
-  if(state.user.totpEnabled){
-    st.innerHTML='<b class="up">Enabled</b> — login requires a 6-digit code.';
-    ac.innerHTML='<button class="btn-red" onclick="disable2FA()">Disable 2FA</button>';
-  } else {
-    st.innerHTML='<span class="muted">Disabled</span> — add a second factor for your account.';
-    if(state.user.isAdmin) ac.innerHTML='<button class="btn-yellow" onclick="setup2FA()">Setup 2FA</button>';
-    else ac.innerHTML='<span class="muted" style="font-size:11px">Only admins can enable 2FA in this demo.</span>';
-  }
-}
-window.setup2FA=async function(){
-  var r=await fetch('/api/auth/2fa/setup',{method:'POST'});
-  var j=await r.json();
-  if(!j.ok){toast(j.error||'Failed','err');return}
-  var code=prompt('Open Google Authenticator → Add account → Enter setup key → paste this:\\n\\n'+j.secret+'\\n\\nThen enter the 6-digit code:');
-  if(!code)return;
-  var r2=await fetch('/api/auth/2fa/enable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code})});
-  var j2=await r2.json();
-  if(j2.ok){toast('2FA enabled','ok');state.user.totpEnabled=true;render2FA();}
-  else toast(j2.error||'Invalid code','err');
-};
-window.disable2FA=async function(){
-  if(!confirm('Disable 2FA? This reduces account security.'))return;
-  await fetch('/api/auth/2fa/disable',{method:'POST'});
-  state.user.totpEnabled=false;render2FA();toast('2FA disabled','');
-};
-
-// ---------- LOOPS ----------
-setInterval(function(){var mid=state.prices[state.symbol];if(mid){if(state.section==='ob')updateOrderBook(mid);var p=state.pairs.find(function(x){return x.symbol===state.symbol});if(p)updateStats(p)}},2500);
-setInterval(function(){if(state.section==='tr')loadTrades()},4000);
-setInterval(async function(){await refreshOrders();await refreshBalances();await refreshPnL()},10000);
-
-init();
-</script>
-</body></html>`;
-
-// ---------- ADMIN PAGE ----------
-const ADMIN_HTML = `<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TradeHub · Admin</title>
-<style>
-${BASE_CSS}
-body{padding-bottom:40px}
-.top{background:var(--panel);padding:12px 16px;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
-.brand{color:var(--yellow);font-weight:800;font-size:16px}
-.spacer{flex:1}
-.top a{color:var(--yellow);font-size:13px;font-weight:500}
-.wrap{max-width:1300px;margin:0 auto;padding:16px;display:flex;flex-direction:column;gap:16px}
-.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;overflow-x:auto}
-.panel h2{font-size:14px;color:var(--yellow);margin-bottom:12px;font-weight:700}
-table{width:100%;border-collapse:collapse;font-size:12px;min-width:520px;font-family:'JetBrains Mono',monospace}
-th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border);white-space:nowrap}
-th{color:var(--text3);font-weight:500;font-size:10px;text-transform:uppercase;font-family:Inter,sans-serif}
-td button{background:var(--blue);color:#fff;padding:4px 9px;font-size:11px;margin-right:4px;font-family:Inter,sans-serif;border:none;border-radius:4px;cursor:pointer}
-td button.danger{background:var(--red)}
-td button.yellow{background:var(--yellow);color:#0b0e11}
-.empty{padding:20px;text-align:center;color:var(--text3);font-size:12px}
-</style></head><body>
-<div class="top">
-  <div class="brand">⚡ TradeHub Admin</div>
-  <div class="spacer"></div>
-  <a href="/">← Terminal</a>
-</div>
-<div class="wrap" id="wrap"><div class="empty">Loading…</div></div>
-<script>
-function $(s){return document.querySelector(s)}
-async function load(){
-  var me=await fetch('/api/auth/me');
-  if(!me.ok){location.href='/login';return}
-  var md=await me.json();
-  if(!md.user.isAdmin){$('#wrap').innerHTML='<div class="empty">Admin access required.</div>';return}
-  var u=await fetch('/api/admin/users').then(function(r){return r.json()});
-  var o=await fetch('/api/admin/orders').then(function(r){return r.json()});
-  var t=await fetch('/api/admin/trades').then(function(r){return r.json()});
-  $('#wrap').innerHTML=
-    '<div class="panel"><h2>Users ('+u.users.length+')</h2><table><thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Admin</th><th>2FA</th><th>Created</th><th>Actions</th></tr></thead><tbody>'+
-      u.users.map(function(x){return '<tr>'+
-        '<td>'+x.id+'</td><td>'+x.username+'</td><td>'+x.email+'</td>'+
-        '<td>'+(x.is_admin?'✅':'—')+'</td>'+
-        '<td>'+(x.totp_enabled?'🔒':'—')+'</td>'+
-        '<td>'+new Date(x.created_at*1000).toLocaleDateString()+'</td>'+
-        '<td>'+
-          (!x.is_admin?'<button onclick="promote('+x.id+')">Promote</button>':'<button class="danger" onclick="demote('+x.id+')">Demote</button>')+
-          '<button class="danger" onclick="credit('+x.id+')">Credit</button>'+
-        '</td>'+
-      '</tr>'}).join('')+'</tbody></table>'+
-    '</div>'+
-    '<div class="panel"><h2>Orders ('+o.orders.length+')</h2><table><thead><tr><th>ID</th><th>User</th><th>Symbol</th><th>Side</th><th>Type</th><th>Price</th><th>Amount</th><th>Filled</th><th>Status</th></tr></thead><tbody>'+
-      o.orders.map(function(r){return '<tr>'+
-        '<td>'+r.id+'</td><td>'+r.username+'</td><td>'+r.symbol+'</td>'+
-        '<td>'+r.side+'</td><td>'+r.type+'</td><td>'+r.price+'</td><td>'+r.amount+'</td>'+
-        '<td>'+r.filled+'</td><td>'+r.status+'</td>'+
-      '</tr>'}).join('')+'</tbody></table>'+
-    '</div>'+
-    '<div class="panel"><h2>Trades ('+t.trades.length+')</h2><table><thead><tr><th>ID</th><th>Symbol</th><th>Price</th><th>Amount</th><th>Buyer</th><th>Seller</th><th>Time</th></tr></thead><tbody>'+
-      t.trades.map(function(r){return '<tr>'+
-        '<td>'+r.id+'</td><td>'+r.symbol+'</td><td>'+r.price+'</td><td>'+r.amount+'</td>'+
-        '<td>'+(r.buyer||'—')+'</td><td>'+(r.seller||'—')+'</td>'+
-        '<td>'+new Date(r.created_at*1000).toLocaleString()+'</td>'+
-      '</tr>'}).join('')+'</tbody></table>'+
-    '</div>';
-}
-window.promote=async function(id){await fetch('/api/admin/users/'+id+'/promote',{method:'POST'});load()};
-window.demote=async function(id){if(!confirm('Demote this user?'))return;await fetch('/api/admin/users/'+id+'/demote',{method:'POST'});load()};
-window.credit=async function(id){
-  var symbol=prompt('Asset (USDT, USD, EUR, BTC...):','USDT');
-  if(!symbol)return;
-  var amount=prompt('Amount:','10000');
-  if(!amount)return;
-  await fetch('/api/admin/users/'+id+'/credit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:symbol,amount:Number(amount)})});
-  load();
-};
-load();
-</script></body></html>`;
-
-// ---------- PAGE ROUTES ----------
-app.get('/', (req, res) => res.type('html').send(APP_HTML));
-app.get('/login', (req, res) => res.type('html').send(LOGIN_HTML));
-app.get('/login.html', (req, res) => res.type('html').send(LOGIN_HTML));
-app.get('/admin', (req, res) => res.type('html').send(ADMIN_HTML));
-app.get('/admin.html', (req, res) => res.type('html').send(ADMIN_HTML));
 
 // ---------- WS HUB ----------
 const wss = new WebSocket.Server({ server, path: '/ws' });
 const clients = new Set();
 wss.on('connection', ws => {
   clients.add(ws);
-  PAIRS.forEach(p => {
-    try { ws.send(JSON.stringify({ symbol: p.symbol, price: livePrices[p.symbol] })); } catch {}
+  INSTRUMENTS.forEach(i => {
+    const mid = livePrices[i.symbol] || i.start;
+    try { ws.send(JSON.stringify({ symbol: i.symbol, mid })); } catch {}
   });
   ws.on('close', () => clients.delete(ws));
   ws.on('error', () => clients.delete(ws));
@@ -1460,36 +489,30 @@ function broadcast(obj) {
   for (const c of clients) if (c.readyState === 1) try { c.send(msg); } catch {}
 }
 
-// ---------- BINANCE FEED (crypto only) ----------
-const CRYPTO_PAIRS = PAIRS.filter(p => p.cat === 'crypto');
-function startBinanceFeed() {
-  const streams = CRYPTO_PAIRS.map(p => p.symbol.toLowerCase() + '@trade').join('/');
+// ---------- LIVE FEEDS ----------
+const CRYPTO = INSTRUMENTS.filter(i => i.cat === 'crypto');
+function startBinance() {
+  const streams = CRYPTO.map(i => i.symbol.toLowerCase() + '@trade').join('/');
   const url = 'wss://stream.binance.com:9443/stream?streams=' + streams;
-  let upstream;
-  try { upstream = new WebSocket(url); } catch { return; }
-  let received = false;
-  setTimeout(() => { if (!received) try { upstream.close(); } catch {} }, 15000);
-  upstream.on('message', raw => {
+  let up;
+  try { up = new WebSocket(url); } catch { return; }
+  up.on('message', raw => {
     try {
-      const env = JSON.parse(raw);
-      const d = env.data || env;
-      if (d.s && d.p) { received = true; livePrices[d.s] = parseFloat(d.p); broadcast({ symbol: d.s, price: parseFloat(d.p) }); }
+      const e = JSON.parse(raw); const d = e.data || e;
+      if (d.s && d.p) { livePrices[d.s] = parseFloat(d.p); broadcast({ symbol: d.s, mid: livePrices[d.s] }); }
     } catch {}
   });
-  upstream.on('error', () => {});
-  upstream.on('close', () => setTimeout(startBinanceFeed, 5000));
+  up.on('close', () => setTimeout(startBinance, 5000));
+  up.on('error', () => {});
 }
-
-// ---------- SIMULATED FEED (non-crypto) ----------
-function startSimulatedFeed() {
-  const NONCRYPTO = PAIRS.filter(p => p.cat !== 'crypto');
+function startSimulator() {
+  const NON = INSTRUMENTS.filter(i => i.cat !== 'crypto');
   setInterval(() => {
-    for (const p of NONCRYPTO) {
-      const cur = livePrices[p.symbol] || p.start;
-      const vol = cur * 0.0006;
-      const next = cur + (Math.random() - 0.5) * vol;
-      livePrices[p.symbol] = next;
-      broadcast({ symbol: p.symbol, price: next });
+    for (const i of NON) {
+      const cur = livePrices[i.symbol] || i.start;
+      const vol = cur * 0.0005;
+      livePrices[i.symbol] = cur + (Math.random() - 0.5) * vol;
+      broadcast({ symbol: i.symbol, mid: livePrices[i.symbol] });
     }
   }, 1500);
 }
@@ -1499,10 +522,10 @@ function startSimulatedFeed() {
   try {
     await initDB();
     server.listen(PORT, () => {
-      console.log(`✅ TradeHub on port ${PORT}`);
-      console.log(`   Login:  /login`);
-      startBinanceFeed();
-      startSimulatedFeed();
+      console.log(`✅ TradeHub HFM-style on port ${PORT}`);
+      startBinance();
+      startSimulator();
+      setInterval(processTicks, 1000);
     });
-  } catch (e) { console.error('Startup failed:', e); process.exit(1); }
+  } catch (e) { console.error('Startup:', e); process.exit(1); }
 })();
