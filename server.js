@@ -453,7 +453,7 @@ function startBinance() {
   try { up = new WebSocket(url); } catch { return; }
   up.on('message', raw => {
     try {
-      const e = JSON.parse(raw); const d = e.data || e;
+      const NON = INSTRUMENTS;
       if (d.s && d.p) { livePrices[d.s] = parseFloat(d.p); broadcast({ symbol: d.s, mid: livePrices[d.s] }); }
     } catch {}
   });
