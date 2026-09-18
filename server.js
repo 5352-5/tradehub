@@ -211,7 +211,7 @@ function syntheticCandles(inst,interval,limit){
   const rand=mulberry32(hashSeed(inst.symbol+interval));
   const out=[];
   let price=inst.start;
-  const vol=price*0.006;
+  const vol=price*0.0015;
   const ms=intervalMs(interval);
   const now=Date.now();
   for(let i=limit-1;i>=0;i--){
