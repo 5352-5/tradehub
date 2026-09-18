@@ -206,10 +206,14 @@ async function processTicks(){
 function intervalMs(i){return{'1m':60000,'5m':300000,'15m':900000,'1h':3600000,'4h':14400000,'1d':86400000}[i]||14400000}
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function hashSeed(s){let h=0;for(let i=0;i<s.length;i++)h=((h<<5)-h+s.charCodeAt(i))|0;return Math.abs(h)}
+
 function syntheticCandles(inst,interval,limit){
   const rand=mulberry32(hashSeed(inst.symbol+interval));
-  const out=[];let price=inst.start;
-  const vol=price*0.008;const ms=intervalMs(interval);const now=Date.now();
+  const out=[];
+  let price=inst.start;
+  const vol=price*0.006;
+  const ms=intervalMs(interval);
+  const now=Date.now();
   for(let i=limit-1;i>=0;i--){
     const o=price+(rand()-0.5)*vol;
     const c=o+(rand()-0.5)*vol*1.2;
@@ -218,7 +222,12 @@ function syntheticCandles(inst,interval,limit){
     out.push({t:now-i*ms,o,h,l,c,v:rand()*100+20});
     price=c;
   }
-  if(out.length){const last=out[out.length-1];last.c=livePrices[inst.symbol]||inst.start;last.h=Math.max(last.h,last.c);last.l=Math.min(last.l,last.c)}
+  // Shift entire series so it ends at the live price — chart centers correctly
+  if(out.length){
+    const live=livePrices[inst.symbol]||inst.start;
+    const offset=live-out[out.length-1].c;
+    for(const c of out){c.o+=offset;c.h+=offset;c.l+=offset;c.c+=offset}
+  }
   return out;
 }
 async function fetchKlines(symbol,interval,limit){
@@ -229,7 +238,18 @@ async function fetchKlines(symbol,interval,limit){
       const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
       if(r.ok){
         const data=await r.json();
-        if(Array.isArray(data)&&data.length)return data.map(k=>({t:k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]}));
+        if(Array.isArray(data)&&data.length){
+          const mapped=data.map(k=>({t:k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]}));
+          // Align last close to live price
+          if(mapped.length){
+            const live=livePrices[inst.symbol]||inst.start;
+            const offset=live-mapped[mapped.length-1].c;
+            if(Math.abs(offset)/live<0.05){
+              for(const c of mapped){c.o+=offset;c.h+=offset;c.l+=offset;c.c+=offset}
+            }
+          }
+          return mapped;
+        }
       }
     }catch{}
   }
