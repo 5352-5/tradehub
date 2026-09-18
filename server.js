@@ -1252,7 +1252,7 @@ function startSimulator(){
   setInterval(()=>{
     for(const i of INSTRUMENTS){
       const cur=livePrices[i.symbol]||i.start;
-      const vol=cur*0.002;
+      const vol=cur*0.0008;
       livePrices[i.symbol]=cur+(Math.random()-0.5)*vol;
       broadcast({symbol:i.symbol,mid:livePrices[i.symbol]});
     }
