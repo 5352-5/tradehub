@@ -636,7 +636,28 @@ function updateBigPrices(){
   $('#btnBuyPx').textContent=fp(ask);$('#btnSellPx').textContent=fp(bid);
 }
 
-async function loadKlines(){
+async function loadSignal(){
+  try{
+    var r=await fetch('/api/signals/'+state.symbol+'?interval='+state.timeframe);
+    var j=await r.json();
+    var ov=$('#sigOverall'),sc=$('#sigScore'),partsEl=$('#sigParts');
+    if(!ov)return;
+    if(!j.signal){ov.textContent='—';sc.textContent='—';partsEl.innerHTML='';return}
+    var s=j.signal;
+    ov.textContent=s.overall;
+    var colorMap={ 'strong-buy':'#0ecb81','buy':'#0ecb81','neutral':'#848e9c','sell':'#f6465d','strong-sell':'#f6465d' };
+    ov.style.color=colorMap[s.cls]||'#848e9c';
+    sc.textContent=(s.score>=0?'+':'')+s.score+' / 8';
+    partsEl.innerHTML=s.parts.map(function(p){
+      var col=p.signal==='buy'?'#0ecb81':p.signal==='sell'?'#f6465d':'#848e9c';
+      return '<div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:11px;flex:1;min-width:calc(50% - 3px)">'+
+        '<div style="color:var(--text3);font-size:9px;text-transform:uppercase;letter-spacing:.4px;font-weight:600">'+p.name+'</div>'+
+        '<div style="color:'+col+';font-family:monospace;font-weight:700;margin-top:2px">'+p.value+'</div>'+
+        '<div style="color:var(--text3);font-size:9px;margin-top:1px">'+p.note+'</div>'+
+      '</div>';
+    }).join('');
+  }catch(e){}
+}async function loadKlines(){
   try{var r=await fetch('/api/klines/'+state.symbol+'?interval='+state.timeframe+'&limit=60');var j=await r.json();if(!j.candles||!j.candles.length)return;state.chartData=j.candles;renderChart()}catch(e){}
 }
 $$('#tfBar span').forEach(function(s){s.onclick=function(){$$('#tfBar span').forEach(function(x){x.classList.remove('on')});s.classList.add('on');state.timeframe=s.dataset.tf;loadKlines()}});
