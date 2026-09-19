@@ -999,7 +999,15 @@ app.get('/api/instruments',(req,res)=>{
   const out=INSTRUMENTS.map(x=>{const mid=livePrices[x.symbol]||x.start;const{bid,ask}=getBidAsk(x.symbol,mid);return{symbol:x.symbol,base:x.base,quote:x.quote,cat:x.cat,bid,ask,mid,leverage:CATS[x.cat].lev}});
   res.json({instruments:out});
 });
-app.get('/api/klines/:symbol',async(req,res)=>{
+app.get('/api/signals/:symbol',async(req,res)=>{
+  const sym=(req.params.symbol||'').toUpperCase();
+  const interval=String(req.query.interval||'15m');
+  const candles=await fetchKlines(sym,interval,100);
+  if(!candles||candles.length<30)return res.json({signal:null,candles:candles?candles.length:0});
+  const closes=candles.map(c=>c.c);
+  const sig=computeSignal(closes);
+  res.json({signal:sig,candles:candles.length,interval});
+});app.get('/api/klines/:symbol',async(req,res)=>{
   const sym=(req.params.symbol||'').toUpperCase();
   const interval=String(req.query.interval||'4h');
   const limit=Math.min(Number(req.query.limit)||100,500);
