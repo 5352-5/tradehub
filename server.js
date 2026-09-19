@@ -1,4 +1,3 @@
-
 const express=require('express');
 const cookieParser=require('cookie-parser');
 const http=require('http');
@@ -143,7 +142,9 @@ async function unrealizedPnl(userId){
 }
 
 function quoteFor(balance){
-  const b=Math.max(MIN_BALANCE,Math.min(MAX_BALANCE,Math.floor(balance/100)*100));
+  const num=Number(balance);
+  if(!isFinite(num)||num<=0)return{balance:FREE_BALANCE,price_kes:0,days:99999,isFree:true};
+  const b=Math.max(MIN_BALANCE,Math.min(MAX_BALANCE,Math.floor(num/100)*100));
   if(b<=FREE_BALANCE)return{balance:b,price_kes:0,days:99999,isFree:true};
   const price=Math.ceil((b/1000)*RATE_PER_1K_KES);
   return{balance:b,price_kes:price,days:30,isFree:false};
@@ -259,17 +260,19 @@ function hashSeed(s){let h=0;for(let i=0;i<s.length;i++)h=((h<<5)-h+s.charCodeAt
 function syntheticCandles(inst,interval,limit){
   const rand=mulberry32(hashSeed(inst.symbol+interval));
   const live=livePrices[inst.symbol]||inst.start;
-  const out=[];
-  const amplitude=live*0.003;
+  const amplitude=live*0.008;
   const ms=intervalMs(interval);
   const now=Date.now();
-  let center=live;
+  const out=[];
   for(let i=0;i<limit;i++){
-    center+=(live-center)*0.15+(rand()-0.5)*amplitude*0.5;
-    const o=center+(rand()-0.5)*amplitude*0.3;
-    const c=center+(rand()-0.5)*amplitude*0.3;
-    const h=Math.max(o,c)+rand()*amplitude*0.2;
-    const l=Math.min(o,c)-rand()*amplitude*0.2;
+    const phase=i*0.55;
+    const wave=Math.sin(phase)*amplitude*0.4+Math.sin(phase*2.1)*amplitude*0.18;
+    const noise=(rand()-0.5)*amplitude*0.35;
+    const center=live+wave+noise;
+    const o=center+(rand()-0.5)*amplitude*0.25;
+    const c=center+(rand()-0.5)*amplitude*0.25;
+    const h=Math.max(o,c)+rand()*amplitude*0.18;
+    const l=Math.min(o,c)-rand()*amplitude*0.18;
     out.push({t:now-(limit-i)*ms,o,h,l,c,v:rand()*100+20});
   }
   if(out.length){
@@ -281,24 +284,18 @@ function syntheticCandles(inst,interval,limit){
   return out;
 }
 
-// ---------- TECHNICAL INDICATORS ----------
 function calcRSI(closes,period){
   if(closes.length<period+1)return null;
   let gains=0,losses=0;
-  for(let i=1;i<=period;i++){
-    const diff=closes[i]-closes[i-1];
-    if(diff>=0)gains+=diff;else losses-=diff;
-  }
-  let avgGain=gains/period,avgLoss=losses/period;
+  for(let i=1;i<=period;i++){const d=closes[i]-closes[i-1];if(d>=0)gains+=d;else losses-=d}
+  let ag=gains/period,al=losses/period;
   for(let i=period+1;i<closes.length;i++){
-    const diff=closes[i]-closes[i-1];
-    const g=diff>0?diff:0,l=diff<0?-diff:0;
-    avgGain=(avgGain*(period-1)+g)/period;
-    avgLoss=(avgLoss*(period-1)+l)/period;
+    const d=closes[i]-closes[i-1];
+    const g=d>0?d:0,l=d<0?-d:0;
+    ag=(ag*(period-1)+g)/period;al=(al*(period-1)+l)/period;
   }
-  if(avgLoss===0)return 100;
-  const rs=avgGain/avgLoss;
-  return 100-100/(1+rs);
+  if(al===0)return 100;
+  return 100-100/(1+ag/al);
 }
 function calcEMA(values,period){
   if(values.length<period)return null;
@@ -308,28 +305,25 @@ function calcEMA(values,period){
   return ema;
 }
 function calcEMAseries(values,period){
-  if(values.length<period)return [];
-  const k=2/(period+1);
-  const out=[];
+  if(values.length<period)return[];
+  const k=2/(period+1);const out=[];
   let ema=values.slice(0,period).reduce((a,b)=>a+b,0)/period;
   out.push({i:period-1,v:ema});
   for(let i=period;i<values.length;i++){ema=values[i]*k+ema*(1-k);out.push({i,v:ema})}
   return out;
 }
 function calcMACD(closes){
-  const ema12=calcEMAseries(closes,12);
-  const ema26=calcEMAseries(closes,26);
-  if(!ema12.length||!ema26.length)return null;
-  const map26=Object.fromEntries(ema26.map(x=>[x.i,x.v]));
-  const macdLine=[];
-  for(const e of ema12)if(map26[e.i]!=null)macdLine.push({i:e.i,v:e.v-map26[e.i]});
-  if(macdLine.length<9)return null;
-  const vals=macdLine.map(x=>x.v);
-  const signal=calcEMA(vals,9);
-  const macd=vals[vals.length-1];
-  const prev=vals[vals.length-2];
-  const prevSignal=calcEMA(vals.slice(0,-1),9);
-  return{macd,signal,prev,prevSignal,histogram:macd-signal,prevHistogram:prev-prevSignal};
+  const e12=calcEMAseries(closes,12),e26=calcEMAseries(closes,26);
+  if(!e12.length||!e26.length)return null;
+  const m26=Object.fromEntries(e26.map(x=>[x.i,x.v]));
+  const line=[];
+  for(const e of e12)if(m26[e.i]!=null)line.push({i:e.i,v:e.v-m26[e.i]});
+  if(line.length<9)return null;
+  const vals=line.map(x=>x.v);
+  const sig=calcEMA(vals,9);
+  const macd=vals[vals.length-1],prev=vals[vals.length-2];
+  const prevSig=calcEMA(vals.slice(0,-1),9);
+  return{macd,signal:sig,prev,prevSignal:prevSig,histogram:macd-sig,prevHistogram:prev-prevSig};
 }
 function calcBollinger(closes,period,mult){
   if(closes.length<period)return null;
@@ -347,8 +341,7 @@ function computeSignal(closes){
   const ema21=calcEMA(closes,21);
   const macd=calcMACD(closes);
   const bb=calcBollinger(closes,20,2);
-  let score=0;
-  const parts=[];
+  let score=0;const parts=[];
   if(rsi!=null){
     if(rsi<30){score+=2;parts.push({name:'RSI',value:rsi.toFixed(1),signal:'buy',note:'Oversold'})}
     else if(rsi>70){score-=2;parts.push({name:'RSI',value:rsi.toFixed(1),signal:'sell',note:'Overbought'})}
@@ -997,6 +990,7 @@ app.get('/api/subscription/quote',authRequired,(req,res)=>{
 app.post('/api/subscription/request',authRequired,async(req,res)=>{
   const{balance_limit,reference,method}=req.body||{};
   if(!balance_limit||!reference)return res.status(400).json({error:'Balance and reference required'});
+  if(!isFinite(Number(balance_limit)))return res.status(400).json({error:'Invalid balance'});
   const q=quoteFor(balance_limit);
   if(q.isFree)return res.status(400).json({error:'Free balance needs no payment'});
   const existing=await getOne(`SELECT * FROM payment_requests WHERE user_id=? AND status='pending'`,[req.user.id]);
@@ -1129,7 +1123,6 @@ function startSimulator(){
     await initDB();
     server.listen(PORT,()=>{
       console.log(`✅ TradeHub running on port ${PORT}`);
-      console.log(`   Free tier: $${FREE_BALANCE} · Rate: KES ${RATE_PER_1K_KES} per $1,000/mo`);
       startBinance();
       startSimulator();
       setInterval(processTicks,1000);
