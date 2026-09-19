@@ -624,7 +624,7 @@ function switchSymbol(sym){
   $('#symBig').textContent=i.base+'/'+i.quote;
   $('#symLev').textContent='1:'+i.leverage;
   $('#fSize').placeholder=i.base==='BTC'?'0.01':i.cat==='forex'?'1000':'1';
-  updateBigPrices();generateOrderBook();loadKlines();refreshSubContent();
+  updateBigPrices();generateOrderBook();loadKlines();loadSignal();refreshSubContent();
 }
 
 function updateBigPrices(){
