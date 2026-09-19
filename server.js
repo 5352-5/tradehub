@@ -1,3 +1,4 @@
+
 const express=require('express');
 const cookieParser=require('cookie-parser');
 const http=require('http');
@@ -19,7 +20,7 @@ const RATE_PER_1K_KES=Number(process.env.PRICE_PER_1K_KES||15);
 const MIN_BALANCE=Number(process.env.MIN_BALANCE||1000);
 const MAX_BALANCE=Number(process.env.MAX_BALANCE||5000000);
 const FREE_BALANCE=Number(process.env.FREE_BALANCE||10000);
-const PAYBILL_NUMBER=process.env.PAYBILL_NUMBER||'400200';
+const PAYBILL_NUMBER=process.env.PAYBILL_NUMBER||'0110713800';
 const PAYBILL_ACCOUNT=process.env.PAYBILL_ACCOUNT||'TRADEHUB';
 
 const CATS={
@@ -141,7 +142,6 @@ async function unrealizedPnl(userId){
   return total;
 }
 
-// ---------- SUBSCRIPTION HELPERS ----------
 function quoteFor(balance){
   const b=Math.max(MIN_BALANCE,Math.min(MAX_BALANCE,Math.floor(balance/100)*100));
   if(b<=FREE_BALANCE)return{balance:b,price_kes:0,days:99999,isFree:true};
@@ -164,9 +164,7 @@ async function grantSubscription(userId,balanceLimit,amountPaid,days){
   const now=Math.floor(Date.now()/1000);
   const existing=await getActiveSub(userId);
   let startFrom=now;
-  if(existing&&existing.expires_at>now&&existing.balance_limit>=balanceLimit){
-    startFrom=existing.expires_at;
-  }
+  if(existing&&existing.expires_at>now&&existing.balance_limit>=balanceLimit)startFrom=existing.expires_at;
   const expires=startFrom+(days||30)*86400;
   await run(`UPDATE subscriptions SET status='expired' WHERE user_id=? AND status='active'`,[userId]);
   await run(`INSERT INTO subscriptions(user_id,balance_limit,amount_paid_kes,started_at,expires_at,status) VALUES(?,?,?,?,?,?)`,[userId,balanceLimit,amountPaid||0,now,expires,'active']);
@@ -260,27 +258,30 @@ function hashSeed(s){let h=0;for(let i=0;i<s.length;i++)h=((h<<5)-h+s.charCodeAt
 
 function syntheticCandles(inst,interval,limit){
   const rand=mulberry32(hashSeed(inst.symbol+interval));
+  const live=livePrices[inst.symbol]||inst.start;
   const out=[];
-  let price=inst.start;
-  const vol=price*0.0003;
+  const amplitude=live*0.003;
   const ms=intervalMs(interval);
   const now=Date.now();
-  for(let i=limit-1;i>=0;i--){
-    const o=price+(rand()-0.5)*vol;
-    const c=o+(rand()-0.5)*vol*1.2;
-    const h=Math.max(o,c)+rand()*vol*0.6;
-    const l=Math.min(o,c)-rand()*vol*0.6;
-    out.push({t:now-i*ms,o,h,l,c,v:rand()*100+20});
-    price=c;
+  let center=live;
+  for(let i=0;i<limit;i++){
+    center+=(live-center)*0.15+(rand()-0.5)*amplitude*0.5;
+    const o=center+(rand()-0.5)*amplitude*0.3;
+    const c=center+(rand()-0.5)*amplitude*0.3;
+    const h=Math.max(o,c)+rand()*amplitude*0.2;
+    const l=Math.min(o,c)-rand()*amplitude*0.2;
+    out.push({t:now-(limit-i)*ms,o,h,l,c,v:rand()*100+20});
   }
   if(out.length){
-    const live=livePrices[inst.symbol]||inst.start;
-    const offset=live-out[out.length-1].c;
-    for(const c of out){c.o+=offset;c.h+=offset;c.l+=offset;c.c+=offset}
+    const last=out[out.length-1];
+    last.c=live;
+    last.h=Math.max(last.h,live);
+    last.l=Math.min(last.l,live);
   }
   return out;
 }
-async function // ---------- TECHNICAL INDICATORS ----------
+
+// ---------- TECHNICAL INDICATORS ----------
 function calcRSI(closes,period){
   if(closes.length<period+1)return null;
   let gains=0,losses=0;
@@ -338,7 +339,6 @@ function calcBollinger(closes,period,mult){
   const sd=Math.sqrt(variance);
   return{upper:mean+mult*sd,middle:mean,lower:mean-mult*sd,sd};
 }
-
 function computeSignal(closes){
   if(!closes||closes.length<30)return null;
   const price=closes[closes.length-1];
@@ -347,48 +347,39 @@ function computeSignal(closes){
   const ema21=calcEMA(closes,21);
   const macd=calcMACD(closes);
   const bb=calcBollinger(closes,20,2);
-
   let score=0;
   const parts=[];
-
-  // RSI
   if(rsi!=null){
     if(rsi<30){score+=2;parts.push({name:'RSI',value:rsi.toFixed(1),signal:'buy',note:'Oversold'})}
     else if(rsi>70){score-=2;parts.push({name:'RSI',value:rsi.toFixed(1),signal:'sell',note:'Overbought'})}
     else parts.push({name:'RSI',value:rsi.toFixed(1),signal:'neutral',note:'Normal'});
   }
-
-  // EMA cross
   if(ema9!=null&&ema21!=null){
     const diff=(ema9-ema21)/ema21;
     if(diff>0.0005){score+=2;parts.push({name:'EMA 9/21',value:'Bullish',signal:'buy',note:'Golden cross'})}
     else if(diff<-0.0005){score-=2;parts.push({name:'EMA 9/21',value:'Bearish',signal:'sell',note:'Death cross'})}
     else parts.push({name:'EMA 9/21',value:'Flat',signal:'neutral',note:'No clear trend'});
   }
-
-  // MACD
   if(macd){
     if(macd.macd>macd.signal&&macd.prev<=macd.prevSignal){score+=2;parts.push({name:'MACD',value:'Cross up',signal:'buy',note:'Bullish crossover'})}
     else if(macd.macd<macd.signal&&macd.prev>=macd.prevSignal){score-=2;parts.push({name:'MACD',value:'Cross down',signal:'sell',note:'Bearish crossover'})}
     else if(macd.histogram>0){score+=1;parts.push({name:'MACD',value:'Above',signal:'buy',note:'Momentum up'})}
     else if(macd.histogram<0){score-=1;parts.push({name:'MACD',value:'Below',signal:'sell',note:'Momentum down'})}
   }
-
-  // Bollinger
   if(bb){
     if(price>bb.upper){score-=1;parts.push({name:'Bollinger',value:'Above upper',signal:'sell',note:'Overextended'})}
     else if(price<bb.lower){score+=1;parts.push({name:'Bollinger',value:'Below lower',signal:'buy',note:'Overextended'})}
     else parts.push({name:'Bollinger',value:'Inside',signal:'neutral',note:'Within bands'});
   }
-
   let overall='NEUTRAL',cls='neutral';
   if(score>=4){overall='STRONG BUY';cls='strong-buy'}
   else if(score>=2){overall='BUY';cls='buy'}
   else if(score<=-4){overall='STRONG SELL';cls='strong-sell'}
   else if(score<=-2){overall='SELL';cls='sell'}
-
   return{overall,cls,score,parts,price};
-}fetchKlines(symbol,interval,limit){
+}
+
+async function fetchKlines(symbol,interval,limit){
   const inst=INST_MAP[symbol];
   if(!inst)return[];
   if(inst.cat==='crypto'){
@@ -458,19 +449,22 @@ const APP_HTML=`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta
       </div>
       <div class="candles" id="candles"><div class="paxis" id="paxis"></div></div>
     </div>
-  <div style="padding:14px 18px 0" id="signalPanel">
-  <div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px;display:flex;justify-content:space-between;align-items:center">
-    <div>
-      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;font-weight:600">Signal</div>
-      <div id="sigOverall" style="font-family:monospace;font-weight:800;font-size:18px;margin-top:2px;color:var(--text2)">—</div>
+
+    <div style="padding:14px 18px 0" id="signalPanel">
+      <div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px;display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;font-weight:600">Signal</div>
+          <div id="sigOverall" style="font-family:monospace;font-weight:800;font-size:18px;margin-top:2px;color:var(--text2)">—</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;font-weight:600">Confidence</div>
+          <div id="sigScore" style="font-family:monospace;font-weight:700;font-size:14px;color:var(--text2)">—</div>
+        </div>
+      </div>
+      <div id="sigParts" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"></div>
     </div>
-    <div style="text-align:right">
-      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;font-weight:600">Confidence</div>
-      <div id="sigScore" style="font-family:monospace;font-weight:700;font-size:14px;color:var(--text2)">—</div>
-    </div>
-  </div>
-  <div id="sigParts" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"></div>
-</div>  <div class="subtabs" id="subTabs">
+
+    <div class="subtabs" id="subTabs">
       <span class="active" data-sub="book">Order Book</span>
       <span data-sub="pos">Positions</span>
       <span data-sub="pend">Pending</span>
@@ -572,12 +566,12 @@ function fmt(n,d){if(n==null||isNaN(n))return'—';return Number(n).toLocaleStri
 function fp(p){if(p==null||isNaN(p))return'—';const a=Math.abs(p);if(a>=1000)return fmt(p,2);if(a>=1)return p.toFixed(2);if(a>=0.01)return p.toFixed(4);return p.toFixed(6)}
 function money(n){if(n==null||isNaN(n))return'—';const s=n>=0?'+':'';return s+'$'+fmt(Math.abs(n),2)}
 
-var state={instruments:[],prices:{},bids:{},asks:{},user:null,account:null,positions:[],pending:[],history:[],symbol:'BTCUSDT',category:'crypto',page:'markets',subtab:'book',portTab:'pos',orderType:'market',timeframe:'4h',chartData:[],orderBook:{bids:[],asks:[]}};
+var state={instruments:[],prices:{},bids:{},asks:{},user:null,account:null,positions:[],pending:[],history:[],symbol:'BTCUSDT',category:'crypto',page:'markets',subtab:'book',portTab:'pos',orderType:'market',timeframe:'4h',chartData:[],orderBook:{bids:[],asks:[]},signal:null};
 
 function toast(m,t){var el=document.createElement('div');el.className='toast '+(t||'');el.textContent=m;$('#toasts').appendChild(el);setTimeout(function(){el.style.transition='opacity .3s';el.style.opacity='0';setTimeout(function(){el.remove()},300)},3200)}
 
 var ws;
-function connectWS(){var proto=location.protocol==='https:'?'wss://':'ws://';ws=new WebSocket(proto+location.host+'/ws');ws.onopen=function(){$('#connTxt').textContent='Live'};ws.onmessage=function(e){try{var m=JSON.parse(e.data);if(m.symbol&&m.mid!=null)onTick(m.symbol,m.mid)}catch(err){}};ws.onclose=function(){$('#connTxt').textContent='Offline';setTimeout(connectWS,3000)};ws.onerror=function(){$('#connTxt').textContent='Offline'}}
+function connectWS(){var proto=location.protocol==='https:'?'wss://':'ws://';ws=new WebSocket(proto+location.host+'/ws');ws.onopen=function(){var el=$('#connTxt');if(el)el.textContent='Live'};ws.onmessage=function(e){try{var m=JSON.parse(e.data);if(m.symbol&&m.mid!=null)onTick(m.symbol,m.mid)}catch(err){}};ws.onclose=function(){var el=$('#connTxt');if(el)el.textContent='Offline';setTimeout(connectWS,3000)};ws.onerror=function(){var el=$('#connTxt');if(el)el.textContent='Offline'}}
 
 function onTick(sym,mid){
   state.prices[sym]=mid;
@@ -636,6 +630,10 @@ function updateBigPrices(){
   $('#btnBuyPx').textContent=fp(ask);$('#btnSellPx').textContent=fp(bid);
 }
 
+async function loadKlines(){
+  try{var r=await fetch('/api/klines/'+state.symbol+'?interval='+state.timeframe+'&limit=60');var j=await r.json();if(!j.candles||!j.candles.length)return;state.chartData=j.candles;renderChart()}catch(e){}
+}
+
 async function loadSignal(){
   try{
     var r=await fetch('/api/signals/'+state.symbol+'?interval='+state.timeframe);
@@ -645,7 +643,7 @@ async function loadSignal(){
     if(!j.signal){ov.textContent='—';sc.textContent='—';partsEl.innerHTML='';return}
     var s=j.signal;
     ov.textContent=s.overall;
-    var colorMap={ 'strong-buy':'#0ecb81','buy':'#0ecb81','neutral':'#848e9c','sell':'#f6465d','strong-sell':'#f6465d' };
+    var colorMap={'strong-buy':'#0ecb81','buy':'#0ecb81','neutral':'#848e9c','sell':'#f6465d','strong-sell':'#f6465d'};
     ov.style.color=colorMap[s.cls]||'#848e9c';
     sc.textContent=(s.score>=0?'+':'')+s.score+' / 8';
     partsEl.innerHTML=s.parts.map(function(p){
@@ -657,10 +655,9 @@ async function loadSignal(){
       '</div>';
     }).join('');
   }catch(e){}
-}async function loadKlines(){
-  try{var r=await fetch('/api/klines/'+state.symbol+'?interval='+state.timeframe+'&limit=60');var j=await r.json();if(!j.candles||!j.candles.length)return;state.chartData=j.candles;renderChart()}catch(e){}
 }
-$$('#tfBar span').forEach(function(s){s.onclick=function(){$$('#tfBar span').forEach(function(x){x.classList.remove('on')});s.classList.add('on');state.timeframe=s.dataset.tf;loadKlines()}});
+
+$$('#tfBar span').forEach(function(s){s.onclick=function(){$$('#tfBar span').forEach(function(x){x.classList.remove('on')});s.classList.add('on');state.timeframe=s.dataset.tf;loadKlines();loadSignal()}});
 
 function renderChart(){
   var box=$('#candles'),paxis=$('#paxis');
@@ -860,8 +857,9 @@ async function init(){
   var r=await fetch('/api/instruments');var j=await r.json();
   state.instruments=j.instruments;
   j.instruments.forEach(function(i){state.prices[i.symbol]=i.mid;state.bids[i.symbol]=i.bid;state.asks[i.symbol]=i.ask;i.start=i.mid});
-  renderMarkets();switchSymbol('BTCUSDT'); setInterval(loadSignal,15000);
+  renderMarkets();switchSymbol('BTCUSDT');
   await refreshAll();connectWS();
+  setInterval(loadSignal,15000);
 }
 
 setInterval(async function(){await refreshAccount();await refreshPositions();if(state.page==='trade')await refreshPending();if(state.page==='trade'&&state.subtab==='book')generateOrderBook()},4000);
@@ -911,7 +909,6 @@ window.approvePay=async function(id){if(!confirm('Confirm payment received?'))re
 window.rejectPay=async function(id){if(!confirm('Reject this payment request?'))return;var note=prompt('Reason (optional):')||'';await fetch('/api/admin/payment-requests/'+id+'/reject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:note})});load()};
 load();<\/script></body></html>`;
 
-// ROUTES
 app.get('/',(req,res)=>res.type('html').send(APP_HTML));
 app.get('/login',(req,res)=>res.type('html').send(LOGIN_HTML));
 app.get('/login.html',(req,res)=>res.type('html').send(LOGIN_HTML));
@@ -976,7 +973,6 @@ app.post('/api/auth/2fa/disable',authRequired,adminRequired,async(req,res)=>{
   res.json({ok:true});
 });
 
-// SUBSCRIPTION ROUTES
 app.get('/api/subscription',authRequired,async(req,res)=>{
   await ensureDefaultSub(req.user.id);
   const sub=await getActiveSub(req.user.id);
@@ -1027,7 +1023,6 @@ app.post('/api/admin/payment-requests/:id/reject',authRequired,adminRequired,asy
   res.json({ok:true});
 });
 
-// MARKET
 app.get('/api/instruments',(req,res)=>{
   const out=INSTRUMENTS.map(x=>{const mid=livePrices[x.symbol]||x.start;const{bid,ask}=getBidAsk(x.symbol,mid);return{symbol:x.symbol,base:x.base,quote:x.quote,cat:x.cat,bid,ask,mid,leverage:CATS[x.cat].lev}});
   res.json({instruments:out});
@@ -1040,7 +1035,8 @@ app.get('/api/signals/:symbol',async(req,res)=>{
   const closes=candles.map(c=>c.c);
   const sig=computeSignal(closes);
   res.json({signal:sig,candles:candles.length,interval});
-});app.get('/api/klines/:symbol',async(req,res)=>{
+});
+app.get('/api/klines/:symbol',async(req,res)=>{
   const sym=(req.params.symbol||'').toUpperCase();
   const interval=String(req.query.interval||'4h');
   const limit=Math.min(Number(req.query.limit)||100,500);
@@ -1111,7 +1107,6 @@ app.get('/api/admin/positions',authRequired,adminRequired,async(req,res)=>{
   res.json({positions:rows});
 });
 
-// WS
 const wss=new WebSocket.Server({server,path:'/ws'});
 const clients=new Set();
 wss.on('connection',ws=>{clients.add(ws);INSTRUMENTS.forEach(i=>{const mid=livePrices[i.symbol]||i.start;try{ws.send(JSON.stringify({symbol:i.symbol,mid}))}catch{}});ws.on('close',()=>clients.delete(ws));ws.on('error',()=>clients.delete(ws))});
