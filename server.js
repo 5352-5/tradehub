@@ -860,7 +860,7 @@ async function init(){
   var r=await fetch('/api/instruments');var j=await r.json();
   state.instruments=j.instruments;
   j.instruments.forEach(function(i){state.prices[i.symbol]=i.mid;state.bids[i.symbol]=i.bid;state.asks[i.symbol]=i.ask;i.start=i.mid});
-  renderMarkets();switchSymbol('BTCUSDT');
+  renderMarkets();switchSymbol('BTCUSDT'); setInterval(loadSignal,15000);
   await refreshAll();connectWS();
 }
 
