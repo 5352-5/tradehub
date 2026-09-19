@@ -375,7 +375,7 @@ function computeSignal(closes){
 async function fetchKlines(symbol,interval,limit){
   const inst=INST_MAP[symbol];
   if(!inst)return[];
-  if(inst.cat==='crypto'){
+  if(false&&inst.cat==='crypto'){
     try{
       const r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
       if(r.ok){
