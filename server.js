@@ -318,7 +318,7 @@ const APP_HTML=`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta
 
 <header class="topbar">
   <div class="brand">⚡ TradeHub</div>
-  <div class="conn"><span class="dot"></span><span id="connTxt">Live</span></div>
+  <div class="conn" style="display:none"><span class="dot"></span><span id="connTxt">Live</span></div>
   <div class="spacer"></div>
   <div class="acct-mini"><b id="hEquity">—</b><span id="hUser"></span></div>
 </header>
