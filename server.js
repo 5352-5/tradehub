@@ -280,7 +280,115 @@ function syntheticCandles(inst,interval,limit){
   }
   return out;
 }
-async function fetchKlines(symbol,interval,limit){
+async function // ---------- TECHNICAL INDICATORS ----------
+function calcRSI(closes,period){
+  if(closes.length<period+1)return null;
+  let gains=0,losses=0;
+  for(let i=1;i<=period;i++){
+    const diff=closes[i]-closes[i-1];
+    if(diff>=0)gains+=diff;else losses-=diff;
+  }
+  let avgGain=gains/period,avgLoss=losses/period;
+  for(let i=period+1;i<closes.length;i++){
+    const diff=closes[i]-closes[i-1];
+    const g=diff>0?diff:0,l=diff<0?-diff:0;
+    avgGain=(avgGain*(period-1)+g)/period;
+    avgLoss=(avgLoss*(period-1)+l)/period;
+  }
+  if(avgLoss===0)return 100;
+  const rs=avgGain/avgLoss;
+  return 100-100/(1+rs);
+}
+function calcEMA(values,period){
+  if(values.length<period)return null;
+  const k=2/(period+1);
+  let ema=values.slice(0,period).reduce((a,b)=>a+b,0)/period;
+  for(let i=period;i<values.length;i++)ema=values[i]*k+ema*(1-k);
+  return ema;
+}
+function calcEMAseries(values,period){
+  if(values.length<period)return [];
+  const k=2/(period+1);
+  const out=[];
+  let ema=values.slice(0,period).reduce((a,b)=>a+b,0)/period;
+  out.push({i:period-1,v:ema});
+  for(let i=period;i<values.length;i++){ema=values[i]*k+ema*(1-k);out.push({i,v:ema})}
+  return out;
+}
+function calcMACD(closes){
+  const ema12=calcEMAseries(closes,12);
+  const ema26=calcEMAseries(closes,26);
+  if(!ema12.length||!ema26.length)return null;
+  const map26=Object.fromEntries(ema26.map(x=>[x.i,x.v]));
+  const macdLine=[];
+  for(const e of ema12)if(map26[e.i]!=null)macdLine.push({i:e.i,v:e.v-map26[e.i]});
+  if(macdLine.length<9)return null;
+  const vals=macdLine.map(x=>x.v);
+  const signal=calcEMA(vals,9);
+  const macd=vals[vals.length-1];
+  const prev=vals[vals.length-2];
+  const prevSignal=calcEMA(vals.slice(0,-1),9);
+  return{macd,signal,prev,prevSignal,histogram:macd-signal,prevHistogram:prev-prevSignal};
+}
+function calcBollinger(closes,period,mult){
+  if(closes.length<period)return null;
+  const slice=closes.slice(-period);
+  const mean=slice.reduce((a,b)=>a+b,0)/period;
+  const variance=slice.reduce((a,b)=>a+Math.pow(b-mean,2),0)/period;
+  const sd=Math.sqrt(variance);
+  return{upper:mean+mult*sd,middle:mean,lower:mean-mult*sd,sd};
+}
+
+function computeSignal(closes){
+  if(!closes||closes.length<30)return null;
+  const price=closes[closes.length-1];
+  const rsi=calcRSI(closes,14);
+  const ema9=calcEMA(closes,9);
+  const ema21=calcEMA(closes,21);
+  const macd=calcMACD(closes);
+  const bb=calcBollinger(closes,20,2);
+
+  let score=0;
+  const parts=[];
+
+  // RSI
+  if(rsi!=null){
+    if(rsi<30){score+=2;parts.push({name:'RSI',value:rsi.toFixed(1),signal:'buy',note:'Oversold'})}
+    else if(rsi>70){score-=2;parts.push({name:'RSI',value:rsi.toFixed(1),signal:'sell',note:'Overbought'})}
+    else parts.push({name:'RSI',value:rsi.toFixed(1),signal:'neutral',note:'Normal'});
+  }
+
+  // EMA cross
+  if(ema9!=null&&ema21!=null){
+    const diff=(ema9-ema21)/ema21;
+    if(diff>0.0005){score+=2;parts.push({name:'EMA 9/21',value:'Bullish',signal:'buy',note:'Golden cross'})}
+    else if(diff<-0.0005){score-=2;parts.push({name:'EMA 9/21',value:'Bearish',signal:'sell',note:'Death cross'})}
+    else parts.push({name:'EMA 9/21',value:'Flat',signal:'neutral',note:'No clear trend'});
+  }
+
+  // MACD
+  if(macd){
+    if(macd.macd>macd.signal&&macd.prev<=macd.prevSignal){score+=2;parts.push({name:'MACD',value:'Cross up',signal:'buy',note:'Bullish crossover'})}
+    else if(macd.macd<macd.signal&&macd.prev>=macd.prevSignal){score-=2;parts.push({name:'MACD',value:'Cross down',signal:'sell',note:'Bearish crossover'})}
+    else if(macd.histogram>0){score+=1;parts.push({name:'MACD',value:'Above',signal:'buy',note:'Momentum up'})}
+    else if(macd.histogram<0){score-=1;parts.push({name:'MACD',value:'Below',signal:'sell',note:'Momentum down'})}
+  }
+
+  // Bollinger
+  if(bb){
+    if(price>bb.upper){score-=1;parts.push({name:'Bollinger',value:'Above upper',signal:'sell',note:'Overextended'})}
+    else if(price<bb.lower){score+=1;parts.push({name:'Bollinger',value:'Below lower',signal:'buy',note:'Overextended'})}
+    else parts.push({name:'Bollinger',value:'Inside',signal:'neutral',note:'Within bands'});
+  }
+
+  let overall='NEUTRAL',cls='neutral';
+  if(score>=4){overall='STRONG BUY';cls='strong-buy'}
+  else if(score>=2){overall='BUY';cls='buy'}
+  else if(score<=-4){overall='STRONG SELL';cls='strong-sell'}
+  else if(score<=-2){overall='SELL';cls='sell'}
+
+  return{overall,cls,score,parts,price};
+}fetchKlines(symbol,interval,limit){
   const inst=INST_MAP[symbol];
   if(!inst)return[];
   if(inst.cat==='crypto'){
