@@ -458,7 +458,19 @@ const APP_HTML=`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta
       </div>
       <div class="candles" id="candles"><div class="paxis" id="paxis"></div></div>
     </div>
-    <div class="subtabs" id="subTabs">
+  <div style="padding:14px 18px 0" id="signalPanel">
+  <div style="background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:14px;display:flex;justify-content:space-between;align-items:center">
+    <div>
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;font-weight:600">Signal</div>
+      <div id="sigOverall" style="font-family:monospace;font-weight:800;font-size:18px;margin-top:2px;color:var(--text2)">—</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;font-weight:600">Confidence</div>
+      <div id="sigScore" style="font-family:monospace;font-weight:700;font-size:14px;color:var(--text2)">—</div>
+    </div>
+  </div>
+  <div id="sigParts" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap"></div>
+</div>  <div class="subtabs" id="subTabs">
       <span class="active" data-sub="book">Order Book</span>
       <span data-sub="pos">Positions</span>
       <span data-sub="pend">Pending</span>
