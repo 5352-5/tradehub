@@ -542,7 +542,7 @@ function fmt(n,d){if(n==null||isNaN(n))return'—';return Number(n).toLocaleStri
 function fp(p){if(p==null||isNaN(p))return'—';const a=Math.abs(p);if(a>=1000)return fmt(p,2);if(a>=1)return p.toFixed(2);if(a>=0.01)return p.toFixed(4);return p.toFixed(6)}
 function money(n){if(n==null||isNaN(n))return'—';const s=n>=0?'+':'';return s+'$'+fmt(Math.abs(n),2)}
 
-var state={instruments:[],prices:{},bids:{},asks:{},user:null,account:null,positions:[],pending:[],history:[],symbol:'BTCUSDT',category:'crypto',page:'markets',subtab:'book',portTab:'pos',orderType:'market',timeframe:'4h',chartData:[],orderBook:{bids:[],asks:[]},signal:null};
+var state={instruments:[],prices:{},bids:{},asks:{},user:null,account:null,positions:[],pending:[],history:[],symbol:'BTCUSDT',category:'crypto',page:'markets',subtab:'book',portTab:'pos',orderType:'market',timeframe:'4h',chartData:[],chartMin:0,chartMax:0,chartRange:0,orderBook:{bids:[],asks:[]},signal:null};
 
 function toast(m,t){var el=document.createElement('div');el.className='toast '+(t||'');el.textContent=m;$('#toasts').appendChild(el);setTimeout(function(){el.style.transition='opacity .3s';el.style.opacity='0';setTimeout(function(){el.remove()},300)},3200)}
 
@@ -652,6 +652,7 @@ function renderChart(){
   var mn=Infinity,mx=-Infinity;
   data.forEach(function(c){mn=Math.min(mn,c.l);mx=Math.max(mx,c.h)});
   var pad=(mx-mn)*0.08||1;mn-=pad;mx+=pad;var range=mx-mn;
+  state.chartMin=mn;state.chartMax=mx;state.chartRange=range;
   paxis.innerHTML='';
   for(var k=9;k>=0;k--){var sp=document.createElement('span');sp.textContent=fp(mn+range*k/9);paxis.appendChild(sp)}
   var maxV=1;
@@ -706,7 +707,46 @@ function renderChart(){
   }
 }
 
-function updateLastCandle(mid){if(!state.chartData||!state.chartData.length)return;var last=state.chartData[state.chartData.length-1];last.c=mid;if(mid>last.h)last.h=mid;if(mid<last.l)last.l=mid;renderChart()}
+// Incremental last-candle update — only touches 3 DOM nodes, no full re-render
+function updateLastCandle(mid){
+  if(!state.chartData||!state.chartData.length){return}
+  var data=state.chartData;
+  var last=data[data.length-1];
+  last.c=mid;
+  if(mid>last.h)last.h=mid;
+  if(mid<last.l)last.l=mid;
+  // Recompute range only if exceeded
+  if(mid>state.chartMax||mid<state.chartMin){
+    // Overflow — do a full re-render so axis rescales
+    renderChart();
+    return;
+  }
+  var range=state.chartRange;var mn=state.chartMin;
+  var candles=document.querySelectorAll('#candles .candle');
+  if(!candles.length){renderChart();return}
+  var lastEl=candles[candles.length-1];
+  var bH=Math.max(1,(Math.abs(last.c-last.o)/range)*100);
+  var bB=((Math.min(last.o,last.c)-mn)/range)*100;
+  var wT=((last.h-mn)/range)*100;
+  var wB=((last.l-mn)/range)*100;
+  var body=lastEl.querySelector('.body');
+  var wick=lastEl.querySelector('.wick');
+  if(body){
+    body.style.height=bH+'%';
+    body.style.bottom=bB+'%';
+    lastEl.className='candle '+(last.c>=last.o?'green':'red');
+  }
+  if(wick){
+    wick.style.height=(wT-wB)+'%';
+    wick.style.bottom=wB+'%';
+  }
+  // Live line
+  var line=document.querySelector('#candles .liveline');
+  if(line){
+    var liveB=((mid-mn)/range)*100;
+    line.style.bottom=(8+liveB*(100-8)/100)+'%';
+  }
+}
 
 function generateOrderBook(){
   var mid=state.prices[state.symbol]||0;if(!mid)return;
@@ -757,7 +797,7 @@ function refreshSubContent(){
   }
 }
 
-function refreshPositionsUI(){$$('.pos').forEach(function(el,idx){var p=state.positions[idx];if(!p)return;var i=state.instruments.find(function(x){return x.symbol===p.symbol})||{};var mid=state.prices[p.symbol]||p.entry;var sp=(i.ask||mid)-(i.bid||mid);var cp=p.side==='long'?(i.bid||mid-sp/2):(i.ask||mid+sp/2);var pnl=(cp-p.entry)*p.size*(p.side==='long'?1:-1);var pnlPct=p.entry*p.size>0?(pnl/(p.entry*p.size))*100:0;var pnlEl=el.querySelector('.pnl');var pctEl=el.querySelector('.pnl-pct');if(pnlEl){pnlEl.textContent=money(pnl);pnlEl.className='pnl '+(pnl>=0?'up':'down')}if(pctEl){pctEl.textContent=(pnlPct>=0?'+':'')+pnlPct.toFixed(2)+'%';pctEl.className='pnl-pct '+(pnlPct>=0?'up':'down')}})}
+function refreshPositionsUI(){$$('.pos').forEach(function(el,idx){var p=state.positions[idx];if(!p)return;var i=state.instruments.find(function(x){return x.symbol===p.symbol})||{};var mid=state.prices[p.symbol]||p.entry;var sp=(i.ask||mid)-(i.bid||mid);var cp=p.side==='long'?(i.bid||mid-sp/2):(i.ask||mid+sp/2);var pnl=(cp-p.entry)*p.size*(p.side==='long'?1:-1);var pnlPct=p.entry*p.size>0?(pnl/(p.entry*p.size))*100:0;var pnlEl=el.querySelector('.pnl');var pctEl=el.querySelector('.pnl-pct');if(pnlEl){pnlEl.textContent=money(pnl);pnlEl.className='pnl '+(pnl>=0?'up':'down')}if(pctEl){pctEl.textContent=(pnlPct>=0?'+':'')+pnlPct.toFixed(2)+'%';pctEl.className='pnl-pct '+(pctEl&&pnlPct>=0?'up':'down')}})}
 
 $$('#otoggle span').forEach(function(s){s.onclick=function(){state.orderType=s.dataset.ot;$$('#otoggle span').forEach(function(x){x.classList.toggle('active',x.dataset.ot===state.orderType)});if(state.orderType==='pending'){$('#pendingTypeRow').style.display='block';$('#priceCell').style.display='block';$('#btnPlacePending').style.display='block';$('#bigBtns').style.display='none'}else{$('#pendingTypeRow').style.display='none';$('#priceCell').style.display='none';$('#btnPlacePending').style.display='none';$('#bigBtns').style.display='flex'}}});
 
@@ -1150,8 +1190,9 @@ function startBinance(){
   up.on('close',()=>setTimeout(startBinance,5000));
   up.on('error',()=>{});
 }
+// Faster simulator — 400ms ticks instead of 1500ms
 function startSimulator(){
-  setInterval(()=>{for(const i of INSTRUMENTS){const cur=livePrices[i.symbol]||i.start;const vol=cur*0.0008;livePrices[i.symbol]=cur+(Math.random()-0.5)*vol;broadcast({symbol:i.symbol,mid:livePrices[i.symbol]})}},1500);
+  setInterval(()=>{for(const i of INSTRUMENTS){const cur=livePrices[i.symbol]||i.start;const vol=cur*0.0006;livePrices[i.symbol]=cur+(Math.random()-0.5)*vol;broadcast({symbol:i.symbol,mid:livePrices[i.symbol]})}},400);
 }
 
 (async()=>{
